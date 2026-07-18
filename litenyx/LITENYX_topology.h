@@ -104,10 +104,13 @@ inline LitenyxTopoDecision LitenyxTopoDecide(
     // Cooldown: if a transition happened too recently, force HOLD. The deferred
     // transition height is the first boundary >= lastTransitionHeight + COOLDOWN;
     // equivalently, any h_obs within COOLDOWN of lastTransitionHeight cannot yield
-    // a change. We test the canonical relationship directly.
-    if (lastTransitionHeight != 0 &&
-        (h_obs - lastTransitionHeight) < LITENYX_TOPOLOGY_COOLDOWN) {
-        return LitenyxTopoDecision::HOLD;
+    // a change. Use SIGNED arithmetic: h_obs may be < lastTransitionHeight (e.g. a
+    // decision computed at an earlier boundary than the recorded transition), and
+    // an unsigned subtraction would wrap to a huge value and defeat the guard.
+    if (lastTransitionHeight != 0) {
+        int64_t since = (int64_t)h_obs - (int64_t)lastTransitionHeight;
+        if (since < (int64_t)LITENYX_TOPOLOGY_COOLDOWN)
+            return LitenyxTopoDecision::HOLD;
     }
 
     int32_t A = LitenyxTopoAggregateLoad(obs); // decision uses ONLY A, never S

@@ -191,7 +191,10 @@ BOOST_AUTO_TEST_CASE(transitions_preserve_shared_state_invariant)
     struct GlobalSpentSet {
         std::set<OutPoint> spent;
         bool TrySpend(const OutPoint& op, uint8_t nChainId) {
-            if (nChainId >= LITENYX_MAX_CHAINS) return false; // runtime chainId cap
+            // The shared-state cap must cover every chainId the topology can
+            // activate (up to LITENYX_TOPO_MAX_CHAINS), so the invariant can be
+            // exercised across ALL active chains, not just the Phase-2 floor.
+            if (nChainId >= LITENYX_TOPO_MAX_CHAINS) return false;
             if (spent.count(op)) return false;
             spent.insert(op); return true;
         }
@@ -231,7 +234,7 @@ BOOST_AUTO_TEST_CASE(transitions_preserve_shared_state_invariant)
     // Even after MERGE retires chainIds, a spent outpoint stays spent globally.
     OutPoint Z{uint256S("ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ"), 0};
     BOOST_CHECK(g.TrySpend(Z, 0));
-    BOOST_CHECK(!g.TrySpend(Z, (uint8_t)(LITENYX_MAX_CHAINS - 1))); // any chain, still blocked
+    BOOST_CHECK(!g.TrySpend(Z, (uint8_t)(LITENYX_TOPO_MAX_CHAINS - 1))); // any chain, still blocked
 }
 
 BOOST_AUTO_TEST_SUITE_END()
