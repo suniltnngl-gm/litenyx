@@ -101,9 +101,12 @@ def regtest_node():
     ]
 
     _diag_dir = os.environ.get("LITENYX_DIAG_DIR") or datadir
+    _diag_log_path = os.path.join(_diag_dir, "litenyx_diag.log")
     def _dump_daemon_logs(why):
         try:
-            with open(os.path.join(_diag_dir, "litenyx_daemon_debug.log"), "a") as fh:
+            # Mirror the daemon's own logs into the main diag file so the
+            # existing artifact upload (path: litenyx_diag.log) captures them.
+            with open(_diag_log_path, "a") as fh:
                 fh.write("==== daemon logs (%s) ====\n" % why)
                 dbg = os.path.join(datadir, "debug.log")
                 if os.path.exists(dbg):
@@ -114,8 +117,18 @@ def regtest_node():
                 if os.path.exists(daemon_err_path):
                     with open(daemon_err_path) as src:
                         fh.write("---- stderr ----\n" + src.read()[-10000:])
+            # Also keep a standalone copy for easy inspection.
+            with open(os.path.join(_diag_dir, "litenyx_daemon_debug.log"), "a") as fh:
+                with open(_diag_log_path) as src:
+                    fh.write(src.read())
         except Exception as e:
             pass
+    # Distinguish three RPC-failure modes:
+    #   - warmup (-28 "Loading..." / -26 "Startup in progress"): daemon ALIVE, keep waiting
+    #   - EOF / "couldn't connect": daemon is GONE (crashed or exited) -> raise _DaemonDead
+    #   - any other error: normal RPC error (propagate as RuntimeError)
+    class _DaemonDead(Exception):
+        pass
     def _rpc(method, *args):
         r = subprocess.run(
             cli + [method, *[str(a) for a in args]],
@@ -124,11 +137,16 @@ def regtest_node():
             env=env,
         )
         if r.returncode != 0:
+            err = r.stderr.strip()
+            if "couldn't connect" in err or "EOF" in err:
+                raise _DaemonDead(method + ": " + err)
+            if "code -28" in err or "Loading" in err or "code -26" in err or "Startup" in err:
+                raise RuntimeError("warmup: " + err)  # alive, still starting
             diag = "RPC %s FAILED rc=%d\nARGS=%s\nSTDERR=%s\nSTDOUT=%s\n" % (
-                method, r.returncode, args, r.stderr.strip(), r.stdout.strip())
+                method, r.returncode, args, err, r.stdout.strip())
             with open(os.path.join(_diag_dir, "litenyx_diag.log"), "a") as fh:
                 fh.write(diag + "\n")
-            raise RuntimeError(f"RPC {method} failed: {r.stderr.strip()}")
+            raise RuntimeError(f"RPC {method} failed: {err}")
         out = r.stdout.strip()
         try:
             return json.loads(out)
@@ -138,21 +156,21 @@ def regtest_node():
     # Wait for the daemon to finish warmup AND full initialization before
     # issuing wallet RPCs. getblockchaininfo is only served once the chain is
     # fully initialized (getnetworkinfo returns earlier, during warmup).
+    # NOTE: with -daemon the launcher parent forks and exits 0 immediately, so
+    # proc.poll() is useless for liveness; we detect true death via the RPC
+    # "couldn't connect" / EOF signal instead.
     deadline = time.time() + 120
     ready = False
     while time.time() < deadline:
-        # If the daemon process died, capture its logs and bail out loudly —
-        # a crash during warmup/wallet-load would otherwise surface as a cryptic
-        # "couldn't connect to server: EOF" from the first RPC.
-        if proc.poll() is not None:
-            _dump_daemon_logs("daemon process exited during init (rc=%d)" % proc.returncode)
-            raise RuntimeError("dogecoind exited during init with rc=%d" % proc.returncode)
         try:
             _rpc("getblockchaininfo")
             ready = True
             break
+        except _DaemonDead as e:
+            _dump_daemon_logs("daemon died during init: %s" % e)
+            raise RuntimeError("dogecoind died during init: %s" % e)
         except RuntimeError:
-            time.sleep(0.5)
+            time.sleep(0.5)  # warmup
     if not ready:
         _dump_daemon_logs("daemon never became ready within deadline")
         raise RuntimeError("dogecoind did not finish initialization within 120s")
@@ -161,8 +179,11 @@ def regtest_node():
     # do not call createwallet (which is -32601 until a wallet context loads).
     try:
         _rpc("generatetoaddress", 5, _rpc("getnewaddress"))
+    except _DaemonDead as e:
+        _dump_daemon_logs("daemon died at generatetoaddress: %s" % e)
+        raise
     except RuntimeError:
-        _dump_daemon_logs("generatetoaddress failed")
+        _dump_daemon_logs("generatetoaddress failed (warmup/other)")
         raise
 
     yield _rpc

@@ -58,7 +58,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Litenyx-regtest-diag
-          path: litenyx_diag.log
+          path: |
+            litenyx_diag.log
+            litenyx_daemon_debug.log
 
       - name: Upload build diagnostics
         if: always()
