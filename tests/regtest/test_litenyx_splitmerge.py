@@ -66,6 +66,11 @@ def regtest_node():
     rpc_port = random.randint(20000, 40000)
     env = dict(os.environ)
 
+    # Capture the daemon's own stderr to a file (in -daemon mode its stdout is
+    # minimal, but a crash/abort prints here). datadir is wiped at teardown, so
+    # we mirror the daemon debug.log into _diag_dir on any failure.
+    daemon_err_path = os.path.join(datadir, "dogecoind.stderr.log")
+    daemon_err = open(daemon_err_path, "w")
     proc = subprocess.Popen(
         [
             LITENYXD,
@@ -73,6 +78,7 @@ def regtest_node():
             "-regtest",
             "-txindex=1",
             "-wallet=w",
+            "-debug",
             f"-rpcport={rpc_port}",
             f"-rpcuser={RPC_USER}",
             f"-rpcpassword={RPC_PASSWORD}",
@@ -80,8 +86,10 @@ def regtest_node():
             "-nolisten",
         ],
         env=env,
+        stderr=daemon_err,
     )
     proc.wait(timeout=60)
+    daemon_err.close()
 
     cli = [
         LITENYX_CLI,
@@ -93,6 +101,21 @@ def regtest_node():
     ]
 
     _diag_dir = os.environ.get("LITENYX_DIAG_DIR") or datadir
+    def _dump_daemon_logs(why):
+        try:
+            with open(os.path.join(_diag_dir, "litenyx_daemon_debug.log"), "a") as fh:
+                fh.write("==== daemon logs (%s) ====\n" % why)
+                dbg = os.path.join(datadir, "debug.log")
+                if os.path.exists(dbg):
+                    with open(dbg) as src:
+                        fh.write(src.read()[-20000:])
+                else:
+                    fh.write("(no debug.log)\n")
+                if os.path.exists(daemon_err_path):
+                    with open(daemon_err_path) as src:
+                        fh.write("---- stderr ----\n" + src.read()[-10000:])
+        except Exception as e:
+            pass
     def _rpc(method, *args):
         r = subprocess.run(
             cli + [method, *[str(a) for a in args]],
@@ -115,9 +138,15 @@ def regtest_node():
     # Wait for the daemon to finish warmup AND full initialization before
     # issuing wallet RPCs. getblockchaininfo is only served once the chain is
     # fully initialized (getnetworkinfo returns earlier, during warmup).
-    deadline = time.time() + 90
+    deadline = time.time() + 120
     ready = False
     while time.time() < deadline:
+        # If the daemon process died, capture its logs and bail out loudly —
+        # a crash during warmup/wallet-load would otherwise surface as a cryptic
+        # "couldn't connect to server: EOF" from the first RPC.
+        if proc.poll() is not None:
+            _dump_daemon_logs("daemon process exited during init (rc=%d)" % proc.returncode)
+            raise RuntimeError("dogecoind exited during init with rc=%d" % proc.returncode)
         try:
             _rpc("getblockchaininfo")
             ready = True
@@ -125,15 +154,21 @@ def regtest_node():
         except RuntimeError:
             time.sleep(0.5)
     if not ready:
-        raise RuntimeError("dogecoind did not finish initialization within 90s")
+        _dump_daemon_logs("daemon never became ready within deadline")
+        raise RuntimeError("dogecoind did not finish initialization within 120s")
 
     # Wallet "w" is auto-created/loaded by the -wallet=w startup flag, so we
     # do not call createwallet (which is -32601 until a wallet context loads).
-    _rpc("generatetoaddress", 5, _rpc("getnewaddress"))
+    try:
+        _rpc("generatetoaddress", 5, _rpc("getnewaddress"))
+    except RuntimeError:
+        _dump_daemon_logs("generatetoaddress failed")
+        raise
 
     yield _rpc
 
     subprocess.run(cli + ["stop"], capture_output=True, text=True, env=env)
+    _dump_daemon_logs("teardown")
     shutil.rmtree(datadir, ignore_errors=True)
 
 
