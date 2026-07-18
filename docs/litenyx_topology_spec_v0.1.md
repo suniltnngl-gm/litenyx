@@ -56,8 +56,16 @@ blocks remain part of the canonical record, just no longer extended).
 
 ## 3. Topology Observatory
 
-Over a sliding window of `LITENYX_TOPOLOGY_OBS_WINDOW` blocks ending at the
-observation height, each active chain `c` contributes a **deterministic
+The observation window for an observation height `h_obs` is the **exact,
+boundary-aligned** block range `[h_obs - LITENYX_TOPOLOGY_OBS_WINDOW + 1,
+h_obs]`. Because `h_obs` is, by definition (Section 4), a multiple of
+`LITENYX_TOPOLOGY_OBS_WINDOW`, this range always starts at a window boundary and
+contains exactly `LITENYX_TOPOLOGY_OBS_WINDOW` blocks. There is NO separate
+"sliding" window: the window is the last full aligned epoch ending at `h_obs`.
+This pinning is what makes `M_c` reorg-deterministic — two nodes sharing the same
+tip `h_obs` observe the identical block range.
+
+Over that exact window, each active chain `c` contributes a **deterministic
 measurement** `M_c`. `M_c` MUST be computable by every node from block data
 alone (no off-chain input).
 
@@ -69,15 +77,18 @@ M_c = normalized demand pressure on chain c
       adjusted by (observed fee pressure vs nMinFeeRate)
 ```
 
-The **aggregate topology signal** is:
+`M_c` is the ONLY observatory quantity that feeds the controller. The cross-chain
+imbalance
 
 ```
-S = max_c(M_c) - min_c(M_c)          // cross-chain imbalance
+S = max_c(M_c) - min_c(M_c)          // cross-chain imbalance, TELEMETRY ONLY
 ```
 
-`S` measures how unevenly load is distributed across the active chains. High `S`
-suggests one chain is saturated while another is idle -> a SPLIT or MERGE may be
-indicated depending on absolute levels (see Section 4).
+is computed for observability/debugging only. **`S` has NO role in the
+decision function (Section 4) and MUST NOT be used by any implementation to
+alter `N_h`.** Keeping the decision a function of the single scalar `A`
+(Section 4) is what guarantees `M_c`/`S` can never produce contradictory
+decisions.
 
 Observatory inputs are strictly: block sizes, transaction counts, fee rates, and
 timestamps already committed in the window. No mempool, no wall-clock, no RNG.
@@ -87,7 +98,8 @@ timestamps already committed in the window. No mempool, no wall-clock, no RNG.
 ## 4. Topology Target Controller
 
 At each observation height `h_obs` (a multiple of `LITENYX_TOPOLOGY_OBS_WINDOW`),
-the controller evaluates the deterministic decision:
+the controller evaluates the deterministic decision. The decision is a PURE
+FUNCTION of `(M_0..M_{N_h-1}, N_h, h_obs, lastTransitionHeight)`:
 
 ```
 DECISION = HOLD, unless a band crossing is detected.
@@ -105,15 +117,25 @@ else:
 **Hysteresis:** `A` must cross the band edge; inside the band the decision is
 always HOLD. This prevents oscillation.
 
-**Cooldown:** a topology change may only occur if at least
-`LITENYX_TOPOLOGY_COOLDOWN` blocks have elapsed since the last transition height.
-If cooldown is active, DECISION is forced to HOLD.
+**Cooldown:** a topology change is applied only at a transition height (Section
+5) which is `>= h_obs + LITENYX_TOPOLOGY_COOLDOWN`. Equivalently, the decision
+computed at `h_obs` is *cached* and becomes effective only if the cooldown has
+elapsed by the time the deferred transition height is reached. If cooldown is not
+satisfied at the deferred boundary, the cached decision is discarded and the next
+`h_obs` recomputes from scratch. No second decision is ever computed between
+`h_obs` and its deferred transition height. This is what makes cooldown state
+fully reconstructible from canonical history: `lastTransitionHeight` is itself a
+deterministic function of prior canonical blocks, so every node recomputes the
+identical cooldown status.
 
 **Bounds:** SPLIT is impossible at `N_h == LITENYX_MAX_CHAINS`; MERGE is
-impossible at `N_h == LITENYX_MIN_CHAINS`. The controller MUST clamp.
+impossible at `N_h == LITENYX_MIN_CHAINS`. The controller MUST clamp. Litenyx is
+**permanently multi-chain**: `LITENYX_MIN_CHAINS = 2` is a hard floor, so a MERGE
+can never collapse the system to N=1.
 
 The controller output is a single deterministic enum. Two honest nodes at the
-same `h_obs` with the same chain state compute the identical DECISION.
+same `h_obs` with the same chain state compute the identical DECISION, and the
+same cached decision is reconstructed identically on reorg replay.
 
 ---
 
@@ -123,29 +145,44 @@ A topology decision becomes **consensus-effective** when it is committed in a
 block at the transition height. The transition height is the first block height
 `>= h_obs + LITENYX_TOPOLOGY_COOLDOWN` that is a multiple of
 `LITENYX_TOPOLOGY_OBS_WINDOW` (i.e. the next observation boundary after cooldown).
+The DECISION computed at `h_obs` is *cached* and applied at exactly this
+transition height; `N_h` remains constant between `h_obs` and the transition
+height. A reorg that displaces the transition block simply recomputes the same
+`h_obs` block's cached decision when the branch is re-validated, so replay is
+deterministic and idempotent.
 
 ### 5.1 SPLIT (N -> N+1)
 
-- A new `chainId = N` is activated with acceptance parameters copied from the
-  parameter table at index `N mod table_len` (Phase 2 table is reused; this does
-  NOT introduce dynamic parameters).
-- The new chain's genesis-of-activation is the current parent tip on the chain
-  chosen as its anchor (by deterministic rule: the least-loaded existing chain).
-- `LitenyxAuxHeader.splitVector` carries the activation bitmask; `eventHeight`
+- A new chain is activated at the **next free `chainId = N`** (where `N == N_h`
+  before the transition). Acceptance parameters are copied from the Phase-2
+  parameter table at index `N mod table_len` (the table is reused; this does NOT
+  introduce dynamic parameters).
+- The new chain is a **fresh activation**: its genesis-of-activation is the
+  current parent tip on the chain chosen as its anchor (by deterministic rule:
+  the least-loaded existing chain, derived from `M_c`). It does NOT resume or
+  extend any previously retired chain.
+- `LitenyxAuxHeader.splitVector` carries the activation bitmask with bit `b`
+  set iff `chainId == b` is activated (i.e. exactly bit `N`); `eventHeight`
   carries the transition height.
 - The shared spent-set is UNCHANGED. No coin is created, moved, or duplicated.
 
 ### 5.2 MERGE (N -> N-1)
 
 - The highest `chainId` (`N-1`) is retired: no new blocks may extend it after
-  the transition height.
+  the transition height. Retirement is keyed by `chainId`, never by position.
 - Its unspent outputs and spent entries REMAIN in the global shared set. A merged
   chain's confirmed history is preserved; only its future extension stops.
 - Transactions referencing outpoints from the retired chain remain globally
   spendable/verifiable through the shared set; they are simply no longer
   *routed* to a live chain for new confirmation until re-confirmed on a surviving
   chain (which is allowed: shared universe).
-- `LitenyxAuxHeader.splitVector` carries the retirement bitmask.
+- `LitenyxAuxHeader.splitVector` carries the retirement bitmask with bit `b`
+  set iff `chainId == b` is retired (i.e. exactly bit `N-1`).
+- **ChainId lifecycle / reuse:** a retired `chainId` MAY later be reused by a
+  subsequent SPLIT. Reuse ALWAYS means a fresh activation anchored at the current
+  tip (per §5.1), never a resumption of the retired chain's old tip. Nodes MUST
+  treat every activation of a `chainId` as independent of any prior lifecycle of
+  that same numeric id.
 
 ### 5.3 Deterministic activation
 
