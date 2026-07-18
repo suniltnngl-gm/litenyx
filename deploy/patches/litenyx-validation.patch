@@ -1,16 +1,17 @@
 diff --git a/src/validation.cpp b/src/validation.cpp
-index 97d4ff5..7bbe9d0 100644
+index 97d4ff5..b3d71a6 100644
 --- a/src/validation.cpp
 +++ b/src/validation.cpp
-@@ -34,6 +34,7 @@
+@@ -34,6 +34,8 @@
  #include "txmempool.h"
  #include "ui_interface.h"
  #include "undo.h"
 +#include "litenyx/LITENYX_validation.h"
++#include "litenyx/LITENYX_topology_tracker.h"
  #include "util.h"
  #include "utilmoneystr.h"
  #include "utilstrencodings.h"
-@@ -1683,6 +1684,10 @@ bool DisconnectBlock(const CBlock& block, CValidationState& state, const CBlockI
+@@ -1683,6 +1685,25 @@ bool DisconnectBlock(const CBlock& block, CValidationState& state, const CBlockI
          }
      }
  
@@ -18,10 +19,25 @@ index 97d4ff5..7bbe9d0 100644
 +    // block introduced, so reorgs undo prior history before new history applies.
 +    LitenyxDisconnectSharedState(block);
 +
++    // Litenyx Phase 3: roll back any topology transition this block recorded, so
++    // a reorg across a split/merge boundary restores the prior N_h deterministically.
++    {
++        uint8_t nChainId = block.nyx_aux.chainId;
++        int nFull = 0;
++        if (nChainId < LITENYX_TOPO_MAX_CHAINS) {
++            int64_t sz = (int64_t)::GetSerializeSize(block, SER_DISK, CLIENT_VERSION);
++            int64_t maxsz = (int64_t)LitenyxChainParamsFor(nChainId).nMaxBlockSize;
++            if (maxsz > 0) nFull = (int)(100LL * sz / maxsz);
++            if (nFull > 100) nFull = 100;
++            if (nFull < 0) nFull = 0;
++        }
++        LitenyxTopologyTracker::Instance().Disconnect(nChainId, pindex->nHeight, nFull);
++    }
++
      // move best block pointer to prevout block
      view.SetBestBlock(pindex->pprev->GetBlockHash());
  
-@@ -2033,6 +2038,16 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
+@@ -2033,6 +2054,34 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
      // add this block to the view's block chain
      view.SetBestBlock(pindex->GetBlockHash());
  
@@ -33,6 +49,24 @@ index 97d4ff5..7bbe9d0 100644
 +    }
 +    if (!LitenyxConnectSharedState(block, state)) {
 +        return false;
++    }
++
++    // Litenyx Phase 3: advance the topology tracker from this block's canonical
++    // data. The tracker reads the block's fullness vs its chain's max block size
++    // and, at observation boundaries, may SPLIT/MERGE. All math is delegated to
++    // LITENYX_topology.h (single source of truth). Rollback happens in
++    // DisconnectBlock below.
++    {
++        uint8_t nChainId = block.nyx_aux.chainId;
++        int nFull = 0;
++        if (nChainId < LITENYX_TOPO_MAX_CHAINS) {
++            int64_t sz = (int64_t)::GetSerializeSize(block, SER_DISK, CLIENT_VERSION);
++            int64_t maxsz = (int64_t)LitenyxChainParamsFor(nChainId).nMaxBlockSize;
++            if (maxsz > 0) nFull = (int)(100LL * sz / maxsz);
++            if (nFull > 100) nFull = 100;
++            if (nFull < 0) nFull = 0;
++        }
++        LitenyxTopologyTracker::Instance().Connect(nChainId, pindex->nHeight, nFull);
 +    }
 +
      int64_t nTime5 = GetTimeMicros(); nTimeIndex += nTime5 - nTime4;

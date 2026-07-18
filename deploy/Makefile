@@ -44,6 +44,9 @@ inject-hooks: clone-dogecoin
 	@cp $(REPO_ROOT)/litenyx/LITENYX_sharedstate.cpp $(DOGECOIN_DIR)/src/litenyx/LITENYX_sharedstate.cpp
 	@cp $(REPO_ROOT)/litenyx/LITENYX_validation.h $(DOGECOIN_DIR)/src/litenyx/LITENYX_validation.h
 	@cp $(REPO_ROOT)/litenyx/LITENYX_validation.cpp $(DOGECOIN_DIR)/src/litenyx/LITENYX_validation.cpp
+	@cp $(REPO_ROOT)/litenyx/LITENYX_topology.h $(DOGECOIN_DIR)/src/litenyx/LITENYX_topology.h
+	@cp $(REPO_ROOT)/litenyx/LITENYX_topology_tracker.h $(DOGECOIN_DIR)/src/litenyx/LITENYX_topology_tracker.h
+	@cp $(REPO_ROOT)/litenyx/LITENYX_topology_tracker.cpp $(DOGECOIN_DIR)/src/litenyx/LITENYX_topology_tracker.cpp
 	@echo "Applying litenyx patches (mandatory: any failure is fatal)..."
 	@for p in identity block-aux validation rpc makefile; do \
 		PATCH=$(REPO_ROOT)/deploy/patches/litenyx-$$p.patch; \
