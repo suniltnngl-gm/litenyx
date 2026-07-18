@@ -46,8 +46,8 @@ jobs:
       - name: Run regtest harness (Phase-1+2 mandatory acceptance gate)
         working-directory: deploy
         env:
-          LITENYXD_BIN: ${{ github.workspace }}/external/dogecoin/src/dogecoind
-          LITENYX_CLI_BIN: ${{ github.workspace }}/external/dogecoin/src/dogecoin-cli
+          LITENYXD_BIN: ${{ github.workspace }}/deploy/external/dogecoin/src/dogecoind
+          LITENYX_CLI_BIN: ${{ github.workspace }}/deploy/external/dogecoin/src/dogecoin-cli
         run: make regtest-test
 
       - name: Upload build diagnostics
