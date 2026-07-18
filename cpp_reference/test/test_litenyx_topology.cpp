@@ -3,7 +3,7 @@
 //   History -> Observatory -> SPLIT/HOLD/MERGE
 // Properties asserted:
 //   P1 identical history => identical topology trajectory (determinism)
-//   P2 bounds unbreachable: N in [LITENYX_MIN_CHAINS, LITENYX_MAX_CHAINS]
+//   P2 bounds unbreachable: N in [LITENYX_MIN_CHAINS, LITENYX_TOPO_MAX_CHAINS]
 //   P3 hysteresis + cooldown suppress oscillation
 //   P4 reorg replay reconstructs the same trajectory
 //   P5 transitions preserve the Phase-2 global shared-state invariant
@@ -19,6 +19,8 @@
 #include <cstdint>
 #include <map>
 #include <utility>
+#include <set>
+#include <string>
 
 using LitenyxObservations = std::vector<LitenyxChainObservation>;
 
@@ -29,7 +31,7 @@ struct History {
     std::map<uint32_t, LitenyxObservations> byHeight;
     uint32_t tip = 0;
 
-    void set(uint32_t h, const LitenyxObservations& o) { byHeight[h] = o; if (h>tip) tip = h; }
+    void set(uint32_t h, const LitenyxObservations& o) { byHeight[h] = o; if (h > tip) tip = h; }
 };
 
 // Reconstruct the topology trajectory (N per transition height) from a history,
@@ -77,19 +79,19 @@ BOOST_AUTO_TEST_CASE(bounds_unbreachable)
     // Saturate everything: force SPLIT repeatedly.
     History H;
     LitenyxObservations sat;
-    for (uint8_t c = 0; c < LITENYX_MAX_CHAINS; ++c) sat.push_back(LitenyxChainObservation{100});
+    for (uint8_t c = 0; c < LITENYX_TOPO_MAX_CHAINS; ++c) sat.push_back(LitenyxChainObservation{100});
     for (uint32_t h = 1; h <= 5000; ++h) H.set(h, sat);
 
     Trajectory T; T.reconstruct(H);
     for (uint32_t hh = 1; hh <= 5000; ++hh)
         BOOST_CHECK_GE(T.N_at(hh), (uint8_t)LITENYX_MIN_CHAINS);
     for (uint32_t hh = 1; hh <= 5000; ++hh)
-        BOOST_CHECK_LE(T.N_at(hh), (uint8_t)LITENYX_MAX_CHAINS);
+        BOOST_CHECK_LE(T.N_at(hh), (uint8_t)LITENYX_TOPO_MAX_CHAINS);
 
     // Starve everything: force MERGE repeatedly.
     History H2;
     LitenyxObservations idle;
-    for (uint8_t c = 0; c < LITENYX_MAX_CHAINS; ++c) idle.push_back(LitenyxChainObservation{0});
+    for (uint8_t c = 0; c < LITENYX_TOPO_MAX_CHAINS; ++c) idle.push_back(LitenyxChainObservation{0});
     for (uint32_t h = 1; h <= 5000; ++h) H2.set(h, idle);
     Trajectory T2; T2.reconstruct(H2);
     for (uint32_t hh = 1; hh <= 5000; ++hh)
@@ -105,7 +107,7 @@ BOOST_AUTO_TEST_CASE(identical_history_identical_trajectory)
     for (uint32_t h = 1; h <= 3000; ++h) {
         LitenyxObservations o;
         bool hot = ((h / LITENYX_TOPOLOGY_OBS_WINDOW) % 2) == 0;
-        for (uint8_t c = 0; c < LITENYX_MAX_CHAINS; ++c)
+        for (uint8_t c = 0; c < LITENYX_TOPO_MAX_CHAINS; ++c)
             o.push_back(LitenyxChainObservation{hot ? 95 : 5});
         H.set(h, o);
     }
@@ -115,21 +117,20 @@ BOOST_AUTO_TEST_CASE(identical_history_identical_trajectory)
 
     // Also: a single observation must map to a single decision (pure function).
     LitenyxObservations o;
-    for (uint8_t c = 0; c < LITENYX_MAX_CHAINS; ++c) o.push_back(LitenyxChainObservation{90});
+    for (uint8_t c = 0; c < LITENYX_TOPO_MAX_CHAINS; ++c) o.push_back(LitenyxChainObservation{90});
     LitenyxTopoDecision d1 = LitenyxTopoDecide(o, 2, 1000, 0);
     LitenyxTopoDecision d2 = LitenyxTopoDecide(o, 2, 1000, 0);
     BOOST_CHECK(d1 == d2);
 }
 
-// P3: hysteresis + cooldown suppress oscillation. Drive A across the band edge
-// repeatedly within a cooldown window; N must not flip-flop every window.
+// P3: hysteresis + cooldown suppress oscillation.
 BOOST_AUTO_TEST_CASE(hysteresis_and_cooldown_suppress_oscillation)
 {
     // Cooldown gating is bound-agnostic: test at N = MIN_CHAINS where the
     // available change is always SPLIT (never clamped), and at an in-cooldown
     // height where ANY change must be forced to HOLD.
     LitenyxObservations hi, lo;
-    for (uint8_t c = 0; c < LITENYX_MAX_CHAINS; ++c) { hi.push_back({95}); lo.push_back({5}); }
+    for (uint8_t c = 0; c < LITENYX_TOPO_MAX_CHAINS; ++c) { hi.push_back({95}); lo.push_back({5}); }
 
     // First decision at h=100 (window boundary), lastTrans=0 -> allowed SPLIT.
     LitenyxTopoDecision d0 = LitenyxTopoDecide(hi, (uint8_t)LITENYX_MIN_CHAINS, 100, 0);
@@ -149,30 +150,28 @@ BOOST_AUTO_TEST_CASE(hysteresis_and_cooldown_suppress_oscillation)
     BOOST_CHECK_EQUAL(d2, LitenyxTopoDecision::SPLIT);
 }
 
-// P4: reorg replay reconstructs the same result. Replace a suffix of history
-// (simulating a reorg), recompute, and confirm the trajectory up to the branch
-// point is unchanged and fully determined by the new suffix thereafter.
+// P4: reorg replay reconstructs the same result.
 BOOST_AUTO_TEST_CASE(reorg_replay_reconstructs_same_result)
 {
     History H;
     for (uint32_t h = 1; h <= 2000; ++h) {
         LitenyxObservations o;
-        for (uint8_t c = 0; c < LITENYX_MAX_CHAINS; ++c) o.push_back({ (h%200<100)?90:10 });
+        for (uint8_t c = 0; c < LITENYX_TOPO_MAX_CHAINS; ++c) o.push_back({ (h % 200 < 100) ? 90 : 10 });
         H.set(h, o);
     }
     Trajectory T; T.reconstruct(H);
 
     // Capture trajectory at a branch point well inside the history.
     uint32_t branch = 800;
-    std::map<uint32_t,uint8_t> beforeBranch;
+    std::map<uint32_t, uint8_t> beforeBranch;
     for (auto& kv : T.N_at_transition) if (kv.first <= branch) beforeBranch[kv.first] = kv.second;
 
     // Reorg: replace everything after branch with a DIFFERENT but deterministic
     // pattern. Reconstruct from the modified history.
     History H2 = H;
-    for (uint32_t h = branch+1; h <= 2000; ++h) {
+    for (uint32_t h = branch + 1; h <= 2000; ++h) {
         LitenyxObservations o;
-        for (uint8_t c = 0; c < LITENYX_MAX_CHAINS; ++c) o.push_back({ (h%150<75)?20:80 });
+        for (uint8_t c = 0; c < LITENYX_TOPO_MAX_CHAINS; ++c) o.push_back({ (h % 150 < 75) ? 20 : 80 });
         H2.set(h, o);
     }
     Trajectory T2; T2.reconstruct(H2);
@@ -186,15 +185,13 @@ BOOST_AUTO_TEST_CASE(reorg_replay_reconstructs_same_result)
 }
 
 // P5: transitions preserve the Phase-2 global shared-state invariant.
-// Model the shared spent-set exactly as Phase 2 did, and assert that across
-// every N produced by the controller, Spend(U, Ci) => !Spend(U, Cj).
 BOOST_AUTO_TEST_CASE(transitions_preserve_shared_state_invariant)
 {
     using OutPoint = std::pair<uint256, uint32_t>;
     struct GlobalSpentSet {
         std::set<OutPoint> spent;
         bool TrySpend(const OutPoint& op, uint8_t nChainId) {
-            if (nChainId >= LITENYX_MAX_CHAINS) return false;
+            if (nChainId >= LITENYX_MAX_CHAINS) return false; // runtime chainId cap
             if (spent.count(op)) return false;
             spent.insert(op); return true;
         }
@@ -207,7 +204,7 @@ BOOST_AUTO_TEST_CASE(transitions_preserve_shared_state_invariant)
     for (uint32_t h = 1; h <= 5000; ++h) {
         LitenyxObservations o;
         bool hot = (h % 1000) < 500;
-        for (uint8_t c = 0; c < LITENYX_MAX_CHAINS; ++c) o.push_back({hot?95:5});
+        for (uint8_t c = 0; c < LITENYX_TOPO_MAX_CHAINS; ++c) o.push_back({hot ? 95 : 5});
         H.set(h, o);
     }
     Trajectory T; T.reconstruct(H);

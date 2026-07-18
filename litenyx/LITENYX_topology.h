@@ -26,6 +26,14 @@
 
 // Topology controller parameters (LOCKED — must match spec §2).
 // Values are illustrative; the invariants hold for any valid choice.
+//
+// NOTE: the topology target bound is INDEPENDENT of the Phase-2 shared-state
+// cap LITENYX_MAX_CHAINS (=2, LOCKED for Phase 2). The shared-state cap bounds
+// valid chainId values at runtime; the topology controller may target up to
+// LITENYX_TOPO_MAX_CHAINS parallel chains once Phase 3 activates. The Phase-2
+// lock (N fixed at 2) is preserved because no topology transition is permitted
+// until Phase 3 logic is wired in; this constant only sizes the controller math.
+static const uint32_t LITENYX_TOPO_MAX_CHAINS     = 8;     // LOCKED target upper bound
 static const uint32_t LITENYX_TOPOLOGY_OBS_WINDOW = 100;   // blocks per window
 static const uint32_t LITENYX_TOPOLOGY_COOLDOWN    = 200;  // min blocks between transitions
 // Hysteresis band edges on aggregate absolute load A (mean of M_c).
@@ -91,7 +99,7 @@ inline LitenyxTopoDecision LitenyxTopoDecide(
 {
     (void)h_obs; // window alignment is guaranteed by caller (height determinism)
     if (N_h < LITENYX_MIN_CHAINS) N_h = LITENYX_MIN_CHAINS; // clamp defensively
-    if (N_h > LITENYX_MAX_CHAINS) N_h = LITENYX_MAX_CHAINS;
+    if (N_h > LITENYX_TOPO_MAX_CHAINS) N_h = LITENYX_TOPO_MAX_CHAINS;
 
     // Cooldown: if a transition happened too recently, force HOLD. The deferred
     // transition height is the first boundary >= lastTransitionHeight + COOLDOWN;
@@ -104,7 +112,7 @@ inline LitenyxTopoDecision LitenyxTopoDecide(
 
     int32_t A = LitenyxTopoAggregateLoad(obs); // decision uses ONLY A, never S
 
-    if (A > LITENYX_TOPOLOGY_HYST_HIGH && N_h < LITENYX_MAX_CHAINS)
+    if (A > LITENYX_TOPOLOGY_HYST_HIGH && N_h < LITENYX_TOPO_MAX_CHAINS)
         return LitenyxTopoDecision::SPLIT;   // need more capacity
     if (A < LITENYX_TOPOLOGY_HYST_LOW && N_h > LITENYX_MIN_CHAINS)
         return LitenyxTopoDecision::MERGE;   // reclaim idle capacity
@@ -126,7 +134,7 @@ inline uint32_t LitenyxTopoTransitionHeight(uint32_t h_obs)
 // Applies a cached decision to produce the new N. Pure function of (N_h, dec).
 inline uint8_t LitenyxTopoApply(uint8_t N_h, LitenyxTopoDecision dec)
 {
-    if (dec == LitenyxTopoDecision::SPLIT && N_h < LITENYX_MAX_CHAINS)
+    if (dec == LitenyxTopoDecision::SPLIT && N_h < LITENYX_TOPO_MAX_CHAINS)
         return (uint8_t)(N_h + 1);
     if (dec == LitenyxTopoDecision::MERGE && N_h > LITENYX_MIN_CHAINS)
         return (uint8_t)(N_h - 1);
