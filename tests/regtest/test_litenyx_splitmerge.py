@@ -91,6 +91,7 @@ def regtest_node():
         f"-rpcpassword={RPC_PASSWORD}",
     ]
 
+    _diag_dir = os.environ.get("LITENYX_DIAG_DIR") or datadir
     def _rpc(method, *args):
         r = subprocess.run(
             cli + [method, *[str(a) for a in args]],
@@ -99,6 +100,10 @@ def regtest_node():
             env=env,
         )
         if r.returncode != 0:
+            diag = "RPC %s FAILED rc=%d\nARGS=%s\nSTDERR=%s\nSTDOUT=%s\n" % (
+                method, r.returncode, args, r.stderr.strip(), r.stdout.strip())
+            with open(os.path.join(_diag_dir, "litenyx_diag.log"), "a") as fh:
+                fh.write(diag + "\n")
             raise RuntimeError(f"RPC {method} failed: {r.stderr.strip()}")
         out = r.stdout.strip()
         try:

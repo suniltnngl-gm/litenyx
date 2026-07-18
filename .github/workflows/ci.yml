@@ -50,7 +50,15 @@ jobs:
         env:
           LITENYXD_BIN: ${{ github.workspace }}/deploy/external/dogecoin/src/dogecoind
           LITENYX_CLI_BIN: ${{ github.workspace }}/deploy/external/dogecoin/src/dogecoin-cli
+          LITENYX_DIAG_DIR: ${{ github.workspace }}
         run: make regtest-test
+
+      - name: Upload regtest diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Litenyx-regtest-diag
+          path: litenyx_diag.log
 
       - name: Upload build diagnostics
         if: always()
