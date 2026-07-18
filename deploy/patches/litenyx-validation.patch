@@ -1,5 +1,5 @@
 diff --git a/src/validation.cpp b/src/validation.cpp
-index 97d4ff5..17a4595 100644
+index 97d4ff5..1874a68 100644
 --- a/src/validation.cpp
 +++ b/src/validation.cpp
 @@ -34,6 +34,8 @@
@@ -11,7 +11,7 @@ index 97d4ff5..17a4595 100644
  #include "util.h"
  #include "utilmoneystr.h"
  #include "utilstrencodings.h"
-@@ -1683,6 +1685,24 @@ bool DisconnectBlock(const CBlock& block, CValidationState& state, const CBlockI
+@@ -1683,6 +1685,22 @@ bool DisconnectBlock(const CBlock& block, CValidationState& state, const CBlockI
          }
      }
  
@@ -19,10 +19,9 @@ index 97d4ff5..17a4595 100644
 +    // block introduced, so reorgs undo prior history before new history applies.
 +    LitenyxDisconnectSharedState(block);
 +
-+    // Litenyx Phase 3: roll back any topology transition this block recorded, so
-+    // a reorg across a split/merge boundary restores the prior N_h deterministically.
-+    // Observational only — never fails block disconnection.
-+    try {
++    // Litenyx Phase 3 (ISOLATION BUILD): topology rollback temporarily disabled.
++    (void)0;
++    /* try {
 +        uint8_t nChainId = block.nyx_aux.chainId;
 +        int nTx = 0;
 +        for (const CTransactionRef& tx : block.vtx)
@@ -30,13 +29,12 @@ index 97d4ff5..17a4595 100644
 +        int nFull = (nTx > 0) ? 50 : 0;
 +        LitenyxTopologyTracker::Instance().Disconnect(nChainId, pindex->nHeight, nFull);
 +    } catch (...) {
-+        // Topology observation must not affect consensus validity.
-+    }
++    } */
 +
      // move best block pointer to prevout block
      view.SetBestBlock(pindex->pprev->GetBlockHash());
  
-@@ -2033,6 +2053,35 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
+@@ -2033,6 +2051,31 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
      // add this block to the view's block chain
      view.SetBestBlock(pindex->GetBlockHash());
  
@@ -50,24 +48,20 @@ index 97d4ff5..17a4595 100644
 +        return false;
 +    }
 +
-+    // Litenyx Phase 3: advance the topology tracker from this block's canonical
-+    // data. The tracker reads the block's demand signal vs its chain and, at
-+    // observation boundaries, may SPLIT/MERGE. All math is delegated to
-+    // LITENYX_topology.h (single source of truth). This path is OBSERVATIONAL
-+    // only: a topology-bookkeeping error must NEVER fail or crash block
-+    // connection, so it is wrapped defensively. Rollback happens in
-+    // DisconnectBlock below.
-+    try {
++    // Litenyx Phase 3 (ISOLATION BUILD): topology observation temporarily
++    // disabled to determine whether the mined-block crash lives in the tracker
++    // path. Will be re-enabled once isolated. Phase-2 shared-state remains on.
++    (void)0;
++    /* try {
 +        uint8_t nChainId = block.nyx_aux.chainId;
-+        // Cheap, safe demand proxy: transactions carried (coinbase excluded).
 +        int nTx = 0;
 +        for (const CTransactionRef& tx : block.vtx)
 +            if (!tx->IsCoinBase()) ++nTx;
-+        int nFull = (nTx > 0) ? 50 : 0; // above/below band; enough to observe
++        int nFull = (nTx > 0) ? 50 : 0;
 +        LitenyxTopologyTracker::Instance().Connect(nChainId, pindex->nHeight, nFull);
 +    } catch (...) {
-+        // Topology observation must not affect consensus validity.
-+    }
++    } */
++
 +
      int64_t nTime5 = GetTimeMicros(); nTimeIndex += nTime5 - nTime4;
      LogPrint("bench", "    - Index writing: %.2fms [%.2fs]\n", 0.001 * (nTime5 - nTime4), nTimeIndex * 0.000001);
