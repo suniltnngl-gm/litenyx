@@ -374,18 +374,27 @@ def test_phase3_bounds_unbreachable(regtest_node):
     status = _topo(regtest_node, "status")
     minc, maxc = status["minChains"], status["maxChains"]
 
-    # Sustained saturation must clamp at maxc.
+    # Each legal transition is gated by the cooldown. Because Finalize records
+    # lastTransition as the DEFERRED height (h_obs + COOLDOWN) and the next
+    # decision requires h_obs - lastTransition >= COOLDOWN, consecutive
+    # transitions are spaced 2*COOLDOWN apart == 2*200/OBS_WINDOW(100) == 4 ticks
+    # (this exact semantic is pinned by test_phase3_cooldown_suppresses_oscillation).
+    # Reaching maxc from minc needs (maxc-minc) splits, so drive well past that
+    # many windows and prove the bound HOLDS under continued pressure.
+    ticks_to_saturate = (maxc - minc) * 4 + 8  # +margin, then sustained pressure
     h = 100
-    for _ in range(20):
+    for _ in range(ticks_to_saturate):
         n = _topo(regtest_node, "status")["nChains"]
         for c in range(n):
             _topo(regtest_node, "observe", str(c), "100")
         h += 100
         _topo(regtest_node, "tick", str(h))
+    # Reached the ceiling, and sustained saturation cannot breach it.
     assert _topo(regtest_node, "status")["nChains"] == maxc
 
-    # Sustained idleness must clamp at minc.
-    for _ in range(20):
+    # Sustained idleness must clamp at minc (symmetric floor, same spacing).
+    ticks_to_idle = (maxc - minc) * 4 + 8
+    for _ in range(ticks_to_idle):
         n = _topo(regtest_node, "status")["nChains"]
         for c in range(n):
             _topo(regtest_node, "observe", str(c), "0")
