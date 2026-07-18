@@ -219,10 +219,11 @@ BOOST_AUTO_TEST_CASE(transitions_preserve_shared_state_invariant)
     for (const auto& kv : T.N_at_transition) {
         uint8_t N = kv.second;
         for (uint8_t c = 0; c < N; ++c) {
-            // Unique outpoint per (transition, chain) using a deterministic id.
+            // Unique outpoint per (transition, chain): encode uid across the
+            // first 8 bytes as a base-16 id; c already distinguishes chains.
             std::string s(32, '0');
-            s[0] = char('A' + (uid % 26));
-            s[1] = char('a' + c);
+            for (int k = 0; k < 8; ++k)
+                s[k] = char('0' + ((uid >> (4 * k)) & 0xF));
             OutPoint U{uint256S(s.c_str()), c};
             BOOST_CHECK(g.TrySpend(U, c));          // first spend ok
             for (uint8_t d = 0; d < N; ++d)
