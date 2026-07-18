@@ -43,7 +43,7 @@ jobs:
         working-directory: deploy
         run: make cpp-test
 
-      - name: Run regtest harness (baseline mine/transact/reorg)
+      - name: Run regtest harness (Phase-1+2 mandatory acceptance gate)
         working-directory: deploy
         env:
           LITENYXD_BIN: ${{ github.workspace }}/external/dogecoin/src/dogecoind

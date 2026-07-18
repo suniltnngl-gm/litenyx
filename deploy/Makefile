@@ -42,12 +42,19 @@ inject-hooks: clone-dogecoin
 	@cp $(REPO_ROOT)/litenyx/LITENYX_sharedstate.cpp $(DOGECOIN_DIR)/src/litenyx/LITENYX_sharedstate.cpp
 	@cp $(REPO_ROOT)/litenyx/LITENYX_validation.h $(DOGECOIN_DIR)/src/litenyx/LITENYX_validation.h
 	@cp $(REPO_ROOT)/litenyx/LITENYX_validation.cpp $(DOGECOIN_DIR)/src/litenyx/LITENYX_validation.cpp
-	@echo "Applying litenyx patches..."
-	@git -C $(DOGECOIN_DIR) apply $(REPO_ROOT)/deploy/patches/litenyx-identity.patch || true
-	@git -C $(DOGECOIN_DIR) apply $(REPO_ROOT)/deploy/patches/litenyx-block-aux.patch || true
-	@git -C $(DOGECOIN_DIR) apply $(REPO_ROOT)/deploy/patches/litenyx-validation.patch || true
-	@git -C $(DOGECOIN_DIR) apply $(REPO_ROOT)/deploy/patches/litenyx-rpc.patch || true
-	@git -C $(DOGECOIN_DIR) apply $(REPO_ROOT)/deploy/patches/litenyx-makefile.patch || true
+	@echo "Applying litenyx patches (mandatory: any failure is fatal)..."
+	@for p in identity block-aux validation rpc makefile; do \
+		PATCH=$(REPO_ROOT)/deploy/patches/litenyx-$$p.patch; \
+		if git -C $(DOGECOIN_DIR) apply --check $$PATCH >/dev/null 2>&1; then \
+			git -C $(DOGECOIN_DIR) apply $$PATCH \
+				&& echo "applied litenyx-$$p.patch" \
+				|| { echo "FATAL: git apply failed for litenyx-$$p.patch"; exit 1; }; \
+		elif git -C $(DOGECOIN_DIR) apply --reverse --check $$PATCH >/dev/null 2>&1; then \
+			echo "skip litenyx-$$p.patch (already applied)"; \
+		else \
+			echo "FATAL: litenyx-$$p.patch does not apply and is not already applied"; exit 1; \
+		fi; \
+	done
 	@echo "Litenyx hooks injected."
 
 production-build: inject-hooks

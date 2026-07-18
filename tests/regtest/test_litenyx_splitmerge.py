@@ -27,18 +27,27 @@ from pathlib import Path
 
 import pytest
 
-LITENYXD = os.environ.get("LITENYXD_BIN") or shutil.which("dogecoind") or "dogecoind"
-LITENYX_CLI = (
-    os.environ.get("LITENYX_CLI_BIN") or shutil.which("dogecoin-cli") or "dogecoin-cli"
-)
-
-# In CI the built binary path is passed explicitly. If it isn't on PATH we still
-# try shutil.which; only skip when genuinely absent.
+# Phase-2 gate is MANDATORY. The built binaries must be provided explicitly via
+# LITENYXD_BIN / LITENYX_CLI_BIN (set by CI from the Dogecoin build dir). We no
+# longer silently fall back to a PATH lookup that may point at a stock dogecoind
+# lacking the Litenyx shared-state RPC; if the expected binary is absent the
+# harness fails loudly rather than skipping the acceptance gate.
 def _resolve(bin_env, name):
-    if bin_env and os.path.exists(bin_env):
+    if bin_env:
+        if not os.path.exists(bin_env):
+            raise RuntimeError(
+                f"Litenyx binary not found at explicit path {bin_env!r} "
+                f"(set LITENYXD_BIN / LITENYX_CLI_BIN to the built dogecoind/dogecoin-cli)"
+            )
         return bin_env
+    # Last-resort PATH lookup (local dev only); still must exist.
     found = shutil.which(name)
-    return found or name
+    if not found:
+        raise RuntimeError(
+            f"Litenyx binary {name!r} not found on PATH and no explicit "
+            f"LITENYXD_BIN / LITENYX_CLI_BIN provided. Phase-2 gate is mandatory."
+        )
+    return found
 
 LITENYXD = _resolve(os.environ.get("LITENYXD_BIN"), "dogecoind")
 LITENYX_CLI = _resolve(os.environ.get("LITENYX_CLI_BIN"), "dogecoin-cli")
@@ -47,15 +56,10 @@ RPC_USER = "Litenyx"
 RPC_PASSWORD = "litenyxtest"
 
 
-def _have_binaries() -> bool:
-    return shutil.which(LITENYXD) is not None and shutil.which(LITENYX_CLI) is not None
-
-
 @pytest.fixture(scope="module")
 def regtest_node():
     """Start a fresh regtest dogecoind, mine a few blocks, then tear down."""
-    if not _have_binaries():
-        pytest.skip(f"dogecoind/dogecoin-cli not found ({LITENYXD}, {LITENYX_CLI})")
+    # _resolve already guarantees the binaries exist; this is a hard no-skip gate.
 
     datadir = tempfile.mkdtemp(prefix="Litenyx-regtest-")
     rpc_port = random.randint(20000, 40000)
