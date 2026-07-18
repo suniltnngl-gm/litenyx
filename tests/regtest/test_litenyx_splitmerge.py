@@ -66,12 +66,9 @@ def regtest_node():
     rpc_port = random.randint(20000, 40000)
     env = dict(os.environ)
 
-    # Run the daemon in FOREGROUND (no -daemon) and capture its combined
-    # stdout+stderr to a file. A segfault/abort then surfaces in the captured
-    # stream instead of being hidden by -daemon's detach (which only ever shows
-    # a cryptic "couldn't connect: EOF"). This is essential for diagnosing a
-    # hard crash during block connect.
-    daemon_err_path = os.path.join(datadir, "dogecoind.stdout.log")
+    # Run the daemon in -daemon mode (dogecoind always detaches regardless),
+    # capture its network debug.log for crash diagnosis.
+    daemon_err_path = os.path.join(datadir, "dogecoind.stderr.log")
     daemon_err = open(daemon_err_path, "w")
     proc = subprocess.Popen(
         [
@@ -81,16 +78,17 @@ def regtest_node():
             "-txindex=1",
             "-wallet=w",
             "-debug",
-            "-printtoconsole",
             f"-rpcport={rpc_port}",
             f"-rpcuser={RPC_USER}",
             f"-rpcpassword={RPC_PASSWORD}",
+            "-daemon",
             "-nolisten",
         ],
         env=env,
-        stdout=daemon_err,
-        stderr=subprocess.STDOUT,
+        stderr=daemon_err,
     )
+    proc.wait(timeout=60)
+    daemon_err.close()
 
     cli = [
         LITENYX_CLI,
@@ -158,15 +156,11 @@ def regtest_node():
             return out
 
     # Wait for the daemon to finish warmup AND full initialization before
-    # issuing wallet RPCs. In foreground mode proc.poll() is the real process,
-    # so a crash is detected immediately; RPC "couldn't connect"/EOF is a
-    # secondary signal.
+    # issuing wallet RPCs. With -daemon the parent forks and exits 0, so we
+    # detect true death via the RPC "couldn't connect"/EOF signal.
     deadline = time.time() + 120
     ready = False
     while time.time() < deadline:
-        if proc.poll() is not None:
-            _dump_daemon_logs("foreground daemon process exited during init (rc=%d)" % proc.returncode)
-            raise RuntimeError("dogecoind exited during init with rc=%d" % proc.returncode)
         try:
             _rpc("getblockchaininfo")
             ready = True
