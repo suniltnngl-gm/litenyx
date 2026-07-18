@@ -72,6 +72,7 @@ def regtest_node():
             f"-datadir={datadir}",
             "-regtest",
             "-txindex=1",
+            "-wallet=w",
             f"-rpcport={rpc_port}",
             f"-rpcuser={RPC_USER}",
             f"-rpcpassword={RPC_PASSWORD}",
@@ -126,17 +127,8 @@ def regtest_node():
     if not ready:
         raise RuntimeError("dogecoind did not finish initialization within 90s")
 
-    # createwallet may still race initialization; retry briefly.
-    cw_deadline = time.time() + 30
-    while time.time() < cw_deadline:
-        try:
-            _rpc("createwallet", "w")
-            break
-        except RuntimeError as e:
-            if "Method not found" in str(e) or "warmup" in str(e).lower():
-                time.sleep(0.5)
-                continue
-            raise
+    # Wallet "w" is auto-created/loaded by the -wallet=w startup flag, so we
+    # do not call createwallet (which is -32601 until a wallet context loads).
     _rpc("generatetoaddress", 5, _rpc("getnewaddress"))
 
     yield _rpc
@@ -146,8 +138,9 @@ def regtest_node():
 
 
 def _outpoints(specs):
-    """specs: list of (txid_hex, n). Returns a JSON array of {txid, n}."""
-    return [{"txid": t, "n": n} for (t, n) in specs]
+    """specs: list of (txid_hex, n). Returns a JSON *string* array of {txid, n}
+    suitable for passing as a single CLI argument (valid JSON, double-quoted)."""
+    return json.dumps([{"txid": t, "n": n} for (t, n) in specs])
 
 
 def test_phase1_node_reachable_and_mining(regtest_node):
