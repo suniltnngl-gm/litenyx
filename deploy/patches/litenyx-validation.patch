@@ -1,5 +1,5 @@
 diff --git a/src/validation.cpp b/src/validation.cpp
-index 97d4ff5..53ad4c6 100644
+index 97d4ff5..5bba409 100644
 --- a/src/validation.cpp
 +++ b/src/validation.cpp
 @@ -34,6 +34,8 @@
@@ -21,7 +21,7 @@ index 97d4ff5..53ad4c6 100644
 +
 +    // Litenyx Phase 3: roll back any topology transition this block recorded, so
 +    // a reorg across a split/merge boundary restores the prior N_h deterministically.
-+    // Observational only — never fails block disconnection.
++    // Observational only ??? never fails block disconnection.
 +    try {
 +        uint8_t nChainId = block.nyx_aux.chainId;
 +        int nTx = 0;
@@ -36,7 +36,7 @@ index 97d4ff5..53ad4c6 100644
      // move best block pointer to prevout block
      view.SetBestBlock(pindex->pprev->GetBlockHash());
  
-@@ -2033,6 +2053,38 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
+@@ -2033,6 +2053,35 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
      // add this block to the view's block chain
      view.SetBestBlock(pindex->GetBlockHash());
  
@@ -57,16 +57,13 @@ index 97d4ff5..53ad4c6 100644
 +    // path. At an observation boundary Tick(finalize+apply) fires. All math is
 +    // delegated to LITENYX_topology.h (single source of truth). Observational
 +    // only: any bookkeeping error MUST NOT fail or crash block connection.
++    // ISOLATION STEP 1: hook placement only. No tracker mutation, no Observe/Tick.
++    // Pure marker to confirm the patch site + lock context does not itself kill
++    // the daemon during ConnectBlock of a generated block.
 +    try {
-+        uint8_t nChainId = block.nyx_aux.chainId;
-+        int nTx = 0;
-+        for (const CTransactionRef& tx : block.vtx)
-+            if (!tx->IsCoinBase()) ++nTx;
-+        int nFull = (nTx > 0) ? 50 : 0; // above/below band; enough to observe
-+        LitenyxTopologyTracker::Instance().Observe(nChainId, nFull);
-+        if (pindex->nHeight % LITENYX_TOPOLOGY_OBS_WINDOW == 0) {
-+            LitenyxTopologyTracker::Instance().Tick(pindex->nHeight);
-+        }
++        // intentionally empty: topology observation disabled for isolation
++        (void)block;
++        (void)pindex;
 +    } catch (...) {
 +        // Topology observation must not affect consensus validity.
 +    }
