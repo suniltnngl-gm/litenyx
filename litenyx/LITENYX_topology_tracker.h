@@ -25,6 +25,15 @@
 
 class LitenyxTopologyTracker {
 public:
+    // Size the per-chain window accumulators up front. The real block path
+    // (Connect/Observe) never calls Reset() first, so without this the first
+    // Accumulate() would index into empty vectors and crash. The regtest path
+    // masks this because it always issues `reset` before observing.
+    LitenyxTopologyTracker() {
+        m_sumM.assign(LITENYX_TOPO_MAX_CHAINS, 0);
+        m_cntM.assign(LITENYX_TOPO_MAX_CHAINS, 0);
+    }
+
     // ---- lifecycle ----
     void Reset() {
         std::lock_guard<std::mutex> lock(m_mut);
@@ -88,6 +97,10 @@ private:
     }
     void Accumulate(uint8_t chainId, int Mc) {
         if (chainId >= LITENYX_TOPO_MAX_CHAINS) return;
+        // Defensive: guarantee the accumulators are sized even if some path
+        // reached here without a prior ClearWindow()/constructor init.
+        if (m_sumM.size() < LITENYX_TOPO_MAX_CHAINS) m_sumM.assign(LITENYX_TOPO_MAX_CHAINS, 0);
+        if (m_cntM.size() < LITENYX_TOPO_MAX_CHAINS) m_cntM.assign(LITENYX_TOPO_MAX_CHAINS, 0);
         m_sumM[chainId] += Mc;
         m_cntM[chainId] += 1;
     }

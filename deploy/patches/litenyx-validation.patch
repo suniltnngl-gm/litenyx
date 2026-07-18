@@ -1,5 +1,5 @@
 diff --git a/src/validation.cpp b/src/validation.cpp
-index 97d4ff5..ca5ee45 100644
+index 97d4ff5..9fef3cf 100644
 --- a/src/validation.cpp
 +++ b/src/validation.cpp
 @@ -34,6 +34,8 @@
@@ -36,7 +36,7 @@ index 97d4ff5..ca5ee45 100644
      // move best block pointer to prevout block
      view.SetBestBlock(pindex->pprev->GetBlockHash());
  
-@@ -2033,6 +2053,46 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
+@@ -2033,6 +2053,39 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
      // add this block to the view's block chain
      view.SetBestBlock(pindex->GetBlockHash());
  
@@ -50,13 +50,6 @@ index 97d4ff5..ca5ee45 100644
 +        return false;
 +    }
 +
-+    // Litenyx Phase 3: advance the topology tracker from this block's canonical
-+    // data. We route through the SAME Observe()+Tick() primitives that the
-+    // regtest harness exercises (proven safe), rather than the direct Connect()
-+    // entry, so the real-path bookkeeping can never diverge from the tested
-+    // path. At an observation boundary Tick(finalize+apply) fires. All math is
-+    // delegated to LITENYX_topology.h (single source of truth). Observational
-+    // only: any bookkeeping error MUST NOT fail or crash block connection.
 +    // Litenyx Phase 3: advance the topology tracker from this block's canonical
 +    // data. We route through the SAME Observe()+Tick() primitives the regtest
 +    // harness exercises (proven 9/9), so the real-path bookkeeping can never
