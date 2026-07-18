@@ -1,5 +1,5 @@
 diff --git a/src/rpc/mining.cpp b/src/rpc/mining.cpp
-index 80530d2..6b3434e 100644
+index 80530d2..5468217 100644
 --- a/src/rpc/mining.cpp
 +++ b/src/rpc/mining.cpp
 @@ -20,6 +20,8 @@
@@ -22,7 +22,7 @@ index 80530d2..6b3434e 100644
  using namespace std;
  
  /**
-@@ -975,8 +981,94 @@ static const CRPCCommand commands[] =
+@@ -975,8 +981,106 @@ static const CRPCCommand commands[] =
      { "util",               "estimatepriority",       &estimatepriority,       true,  {"nblocks"} },
      { "util",               "estimatesmartfee",       &estimatesmartfee,       true,  {"nblocks"} },
      { "util",               "estimatesmartpriority",  &estimatesmartpriority,  true,  {"nblocks"} },
@@ -59,14 +59,26 @@ index 80530d2..6b3434e 100644
 +        std::string mode = request.params[0].get_str();
 +        uint8_t nChainId = (uint8_t)litenyxGetInt(request.params[1]);
 +
++        // The outpoints argument arrives as a JSON *string* (the CLI delivers
++        // positional structured args as strings), so we parse it ourselves.
++        UniValue outpoints(UniValue::VARR);
++        if (request.params.size() >= 3 && request.params[2].isStr()) {
++            UniValue parsed(UniValue::VARR);
++            if (!parsed.read(request.params[2].get_str()))
++                throw JSONRPCError(RPC_INVALID_PARAMETER, "outpoints is not valid JSON");
++            if (!parsed.isArray())
++                throw JSONRPCError(RPC_INVALID_PARAMETER, "outpoints must be a JSON array");
++            outpoints = parsed;
++        }
++
 +        UniValue out(UniValue::VOBJ);
 +        UniValue results(UniValue::VARR);
 +
 +        if (mode == "record") {
-+            if (request.params.size() < 3 || !request.params[2].isArray())
++            if (outpoints.empty())
 +                throw JSONRPCError(RPC_INVALID_PARAMETER, "record requires an outpoints array");
 +            bool allOk = true;
-+            for (const UniValue& e : request.params[2].get_array().getValues()) {
++            for (const UniValue& e : outpoints.getValues()) {
 +                uint256 txid = uint256S(e["txid"].get_str());
 +                uint32_t n = (uint32_t)litenyxGetInt(e["n"]);
 +                bool ok = LitenyxRecordSharedSpend(txid, n, nChainId);
@@ -79,9 +91,9 @@ index 80530d2..6b3434e 100644
 +            }
 +            out.pushKV("all_accepted", allOk);
 +        } else if (mode == "revert") {
-+            if (request.params.size() < 3 || !request.params[2].isArray())
++            if (outpoints.empty())
 +                throw JSONRPCError(RPC_INVALID_PARAMETER, "revert requires an outpoints array");
-+            for (const UniValue& e : request.params[2].get_array().getValues()) {
++            for (const UniValue& e : outpoints.getValues()) {
 +                uint256 txid = uint256S(e["txid"].get_str());
 +                uint32_t n = (uint32_t)litenyxGetInt(e["n"]);
 +                LitenyxRevertSharedSpend(txid, n);
@@ -91,9 +103,9 @@ index 80530d2..6b3434e 100644
 +                results.push_back(r);
 +            }
 +        } else if (mode == "query") {
-+            if (request.params.size() < 3 || !request.params[2].isArray())
++            if (outpoints.empty())
 +                throw JSONRPCError(RPC_INVALID_PARAMETER, "query requires an outpoints array");
-+            for (const UniValue& e : request.params[2].get_array().getValues()) {
++            for (const UniValue& e : outpoints.getValues()) {
 +                uint256 txid = uint256S(e["txid"].get_str());
 +                uint32_t n = (uint32_t)litenyxGetInt(e["n"]);
 +                UniValue r(UniValue::VOBJ);
