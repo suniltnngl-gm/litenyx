@@ -47,6 +47,33 @@ adversarial reorgs and double spends, adding a moving N only multiplies the
 failure modes. Therefore Phase 2 (fixed N=2) is the substrate and the gating
 milestone before any topology change is allowed.
 
+### 3.1 Phase 2 status — GREEN (frozen)
+
+Phase 2 is formally accepted and frozen at tag **`phase2-green`** (commit
+`f5ff75b`, CI run `29638614462`). The fixed two-chain shared-state core proves
+`Spend(U, A) => NOT Spend(U, B)` with reorg-safe rollback, validated by the
+mandatory CI regtest gate (4/4 tests) plus C++ unit tests. The Phase-2
+acceptance gate is closed.
+
+### 3.2 Phase 3 — Dynamic Chain Split/Merge (OPEN)
+
+With the substrate proven, Phase 3 adds a **deterministic, target-regulated
+topology controller** that varies the active chain count `N_h` between the
+locked bounds `LITENYX_MIN_CHAINS = 2` and a fixed `LITENYX_MAX_CHAINS`. It
+introduces no other FUTURE controller. Full behavioral definition:
+`docs/litenyx_topology_spec_v0.1.md`.
+
+The Phase-3 acceptance invariant extends Phase 2:
+
+```
+forall N_h,   Spend(U, C_i) => NOT Spend(U, C_j),   i != j
+```
+
+and additionally requires that any `N -> N±1` transition does NOT cause
+currency duplication, state loss, or spend-state loss. The locked pattern
+continues: lock principle -> specify -> standalone proof -> daemon integration
+-> mandatory adversarial regtest -> GREEN tag.
+
 ## 4. Why controllers come later
 
 Block size (Phase 4) and block reward (Phase 5) are actuators on capacity and
