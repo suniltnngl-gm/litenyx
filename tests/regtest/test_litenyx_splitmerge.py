@@ -165,6 +165,7 @@ def test_phase2_cross_chain_double_spend_excluded(regtest_node):
     U = ("aa" * 32, 0)
     # Spend U on Chain_A (chainId 0).
     res = regtest_node("testlitenyxsharedstate", "record", 0, _outpoints([U]))
+    print("DIAG record chain0 U:", res)
     assert res["all_accepted"] is True, f"first spend rejected: {res}"
 
     # Conflicting spend of the SAME U on Chain_B (chainId 1) must be rejected.
