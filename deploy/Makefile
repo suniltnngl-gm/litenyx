@@ -59,7 +59,7 @@ inject-hooks: clone-dogecoin
 
 production-build: inject-hooks
 	@echo "Configuring build toolchains..."
-	@cd $(DOGECOIN_DIR) && ./autogen.sh && ./configure --with-incompatible-bdb
+	@cd $(DOGECOIN_DIR) && ./autogen.sh && ./configure --with-incompatible-bdb --with-boost-process --with-boost-libdir=/usr/lib/x86_64-linux-gnu
 	@echo "Building (this is slow)..."
 	@cd $(DOGECOIN_DIR) && $(MAKE)
 	@echo "Build complete: dogecoind/dogecoin-cli/dogecoin-tx in $(DOGECOIN_DIR)/src"

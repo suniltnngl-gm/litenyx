@@ -22,7 +22,7 @@ jobs:
           sudo apt-get install -y \
             build-essential libtool autotools-dev automake pkg-config \
             bsdmainutils python3 python3-pip libssl-dev libevent-dev \
-            libboost-dev libboost-system-dev libboost-filesystem-dev \
+            libboost-all-dev \
             libboost-test-dev libboost-thread-dev libboost-chrono-dev \
             libminiupnpc-dev libzmq3-dev libsqlite3-dev libdb++-dev libfmt-dev
           python3 -m pip install --upgrade pip pytest
@@ -37,7 +37,9 @@ jobs:
 
       - name: Build dogecoind / dogecoin-cli
         working-directory: deploy
-        run: make production-build 2>&1 | tee build_diag.log
+        run: |
+          set -o pipefail
+          make production-build 2>&1 | tee build_diag.log
 
       - name: Run C++ unit tests (shared-state core)
         working-directory: deploy
