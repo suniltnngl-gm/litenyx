@@ -2,7 +2,6 @@
 #define LITENYX_TYPES_H
 
 #include <cstdint>
-#include <uint256.h>
 
 // Litenyx: a fork of Dogecoin applying the locked multi-chain principles.
 // Phase 2 (this header set): FIXED two parallel chains sharing ONE UTXO

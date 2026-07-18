@@ -2,14 +2,34 @@
 #define LITENYX_AUXPOW_H
 
 #include <cstdint>
-#include <uint256.h>
-#include <serialize.h>
 #include "LITENYX_types.h"
 
 // Litenyx aux extension (Phase 2). Appended after the 80-byte CBlockHeader
 // (AuxPoW-style). Carries the chainId and a same-chain anchor. This is the
 // shared-state multi-chain substrate: chains are validation contexts that all
 // write to ONE global spent-set (see docs/litenyx_consensus_spec_v0.1.md §3).
+
+#ifdef KERRNYX_STANDALONE_TEST
+// Minimal uint256 shim so the standalone unit test is self-contained and does
+// NOT pull Dogecoin's uint256.h / compat/endian.h (which redefine glibc's
+// byte-swap helpers outside the daemon's configured defines). The daemon build
+// (no KERRNYX_STANDALONE_TEST) uses the real Dogecoin uint256.
+#include <cstring>
+struct uint256 {
+    unsigned char data[32] = {};
+    bool operator==(const uint256& o) const { return std::memcmp(data, o.data, 32) == 0; }
+    bool operator<(const uint256& o) const { return std::memcmp(data, o.data, 32) < 0; }
+};
+inline uint256 uint256S(const char* hex) {
+    uint256 r{};
+    size_t n = 0;
+    for (const char* p = hex; *p && n < 32; ++p, ++n) r.data[n] = (unsigned char)(*p);
+    return r;
+}
+#else
+#include <uint256.h>
+#include <serialize.h>
+#endif
 
 struct LitenyxAuxHeader {
     uint32_t magic;          // LITENYX_AUX_MAGIC
@@ -22,6 +42,7 @@ struct LitenyxAuxHeader {
     void SetMagic() { magic = LITENYX_AUX_MAGIC; }
     bool HasMagic() const { return magic == LITENYX_AUX_MAGIC; }
 
+#ifndef KERRNYX_STANDALONE_TEST
     SERIALIZE_METHODS(LitenyxAuxHeader, obj)
     {
         READWRITE(obj.magic);
@@ -31,6 +52,7 @@ struct LitenyxAuxHeader {
         READWRITE(obj.splitVector);
         READWRITE(obj.reserved);
     }
+#endif
 
     // Validate the aux header for a block evaluated at nEventHeight against a
     // declared target chain count. Phase 2 ignores eventHeight/splitVector.
