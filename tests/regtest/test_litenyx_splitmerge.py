@@ -106,21 +106,32 @@ def regtest_node():
         except json.JSONDecodeError:
             return out
 
-    # Wait for the daemon to finish warmup before issuing wallet RPCs.
-    # Error -28 (RPC_IN_WARMUP) is returned until initialization completes.
-    deadline = time.time() + 60
+    # Wait for the daemon to finish warmup AND full initialization before
+    # issuing wallet RPCs. getblockchaininfo is only served once the chain is
+    # fully initialized (getnetworkinfo returns earlier, during warmup).
+    deadline = time.time() + 90
     ready = False
     while time.time() < deadline:
         try:
-            _rpc("getnetworkinfo")
+            _rpc("getblockchaininfo")
             ready = True
             break
         except RuntimeError:
             time.sleep(0.5)
     if not ready:
-        raise RuntimeError("dogecoind did not finish warmup within 60s")
+        raise RuntimeError("dogecoind did not finish initialization within 90s")
 
-    _rpc("createwallet", "w")
+    # createwallet may still race initialization; retry briefly.
+    cw_deadline = time.time() + 30
+    while time.time() < cw_deadline:
+        try:
+            _rpc("createwallet", "w")
+            break
+        except RuntimeError as e:
+            if "Method not found" in str(e) or "warmup" in str(e).lower():
+                time.sleep(0.5)
+                continue
+            raise
     _rpc("generatetoaddress", 5, _rpc("getnewaddress"))
 
     yield _rpc
