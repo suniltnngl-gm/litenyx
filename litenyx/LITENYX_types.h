@@ -27,9 +27,9 @@ struct LitenyxChainParams {
 
 static constexpr LitenyxChainParams LITENYX_CHAIN_PARAMS[LITENYX_MAX_CHAINS] = {
     // chain 0: fast, cheap (e.g. consumer payments)
-    {     10, 1'000'000, 60 },
+    {     10, 1000000, 60 },
     // chain 1: larger blocks, slower (e.g. settlement)
-    {    100, 4'000'000, 300 },
+    {    100, 4000000, 300 },
 };
 
 // --- Aux extension identity ---------------------------------------------------
