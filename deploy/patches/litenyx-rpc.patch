@@ -1,4 +1,4 @@
-﻿diff --git a/src/rpc/mining.cpp b/src/rpc/mining.cpp
+diff --git a/src/rpc/mining.cpp b/src/rpc/mining.cpp
 index 80530d2..422c3ca 100644
 --- a/src/rpc/mining.cpp
 +++ b/src/rpc/mining.cpp

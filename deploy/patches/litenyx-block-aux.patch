@@ -1,4 +1,4 @@
-﻿diff --git a/src/primitives/block.h b/src/primitives/block.h
+diff --git a/src/primitives/block.h b/src/primitives/block.h
 index 5d1938e..c419523 100644
 --- a/src/primitives/block.h
 +++ b/src/primitives/block.h

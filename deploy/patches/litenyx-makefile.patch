@@ -1,4 +1,4 @@
-﻿diff --git a/src/Makefile.am b/src/Makefile.am
+diff --git a/src/Makefile.am b/src/Makefile.am
 index 2e12b64..17491df 100644
 --- a/src/Makefile.am
 +++ b/src/Makefile.am

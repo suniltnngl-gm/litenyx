@@ -1,4 +1,4 @@
-﻿diff --git a/src/chainparams.cpp b/src/chainparams.cpp
+diff --git a/src/chainparams.cpp b/src/chainparams.cpp
 index 5f8ebaa..3a31902 100644
 --- a/src/chainparams.cpp
 +++ b/src/chainparams.cpp

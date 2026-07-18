@@ -1,4 +1,4 @@
-﻿diff --git a/src/validation.cpp b/src/validation.cpp
+diff --git a/src/validation.cpp b/src/validation.cpp
 index 97d4ff5..7bbe9d0 100644
 --- a/src/validation.cpp
 +++ b/src/validation.cpp
