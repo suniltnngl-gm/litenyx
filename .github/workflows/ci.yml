@@ -1,0 +1,58 @@
+name: Litenyx CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Install build deps (Dogecoin)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential libtool autotools-dev automake pkg-config \
+            bsdmainutils python3 python3-pip libssl-dev libevent-dev \
+            libboost-dev libboost-system-dev libboost-filesystem-dev \
+            libboost-test-dev libboost-thread-dev libboost-chrono-dev \
+            libminiupnpc-dev libzmq3-dev libsqlite3-dev libdb++-dev libfmt-dev
+          python3 -m pip install --upgrade pip pytest
+
+      - name: Clone Dogecoin base
+        working-directory: deploy
+        run: make clone-dogecoin
+
+      - name: Inject Litenyx hooks + patches
+        working-directory: deploy
+        run: make inject-hooks
+
+      - name: Build dogecoind / dogecoin-cli
+        working-directory: deploy
+        run: make production-build 2>&1 | tee build_diag.log
+
+      - name: Run C++ unit tests (shared-state core)
+        working-directory: deploy
+        run: make cpp-test
+
+      - name: Run regtest harness (baseline mine/transact/reorg)
+        working-directory: deploy
+        env:
+          LITENYXD_BIN: ${{ github.workspace }}/external/dogecoin/src/dogecoind
+          LITENYX_CLI_BIN: ${{ github.workspace }}/external/dogecoin/src/dogecoin-cli
+        run: make regtest-test
+
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Litenyx-build-diag
+          path: deploy/build_diag.log

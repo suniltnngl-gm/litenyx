@@ -1,0 +1,71 @@
+# Litenyx deploy Makefile — cross-compat (Codespaces apt + Replit Nix).
+# Dogecoin fork: fixed two-chain shared-state core (Phase 2). Consensus logic
+# lives in litenyx/. Forked daemon lives in external/dogecoin (gitignored clone).
+
+CURDIR ?= $(shell pwd)
+# This Makefile lives in deploy/; the litenyx/ and cpp_reference/ sources are at
+# the repository root (one level up from CURDIR). REPO_ROOT locates them.
+REPO_ROOT ?= $(CURDIR)/..
+DOGECOIN_DIR ?= $(CURDIR)/external/dogecoin
+CXX ?= g++
+BOOST_TEST ?= -lboost_unit_test_framework
+
+KERRNYX_INCLUDES = -I$(REPO_ROOT) -I$(REPO_ROOT)/cpp_reference -I$(DOGECOIN_DIR)/src
+KERRNYX_TEST_SRC = $(REPO_ROOT)/cpp_reference/test/test_litenyx.cpp
+KERRNYX_TEST_BIN = $(REPO_ROOT)/cpp_reference/test/test_litenyx
+
+.PHONY: help cpp-test cpp-compile-check detect-env clone-dogecoin inject-hooks production-build regtest-test
+
+help:
+	@echo "Litenyx targets:"
+	@echo "  cpp-test        Build + run standalone consensus unit tests (boost header-only)"
+	@echo "  clone-dogecoin  Clone Dogecoin base into external/dogecoin (gitignored)"
+	@echo "  inject-hooks    Copy litenyx/ sources + apply patches into the clone"
+	@echo "  production-build Configure + build dogecoind/dogecoin-cli/dogecoin-tx"
+	@echo "  detect-env      Print toolchain include/lib paths"
+
+clone-dogecoin:
+	@if [ -d "$(DOGECOIN_DIR)/.git" ]; then \
+		echo "Dogecoin clone already present."; \
+	else \
+		echo "Cloning Dogecoin..."; \
+		git clone --depth 1 https://github.com/dogecoin/dogecoin.git $(DOGECOIN_DIR); \
+	fi
+
+inject-hooks: clone-dogecoin
+	@echo "Copying litenyx/ consensus sources into the clone..."
+	@mkdir -p $(DOGECOIN_DIR)/src/litenyx
+	@cp $(REPO_ROOT)/litenyx/LITENYX_types.h $(DOGECOIN_DIR)/src/litenyx/LITENYX_types.h
+	@cp $(REPO_ROOT)/litenyx/LITENYX_auxpow.h $(DOGECOIN_DIR)/src/litenyx/LITENYX_auxpow.h
+	@echo "Litenyx hooks injected."
+
+production-build: inject-hooks
+	@echo "Configuring build toolchains..."
+	@cd $(DOGECOIN_DIR) && ./autogen.sh && ./configure --with-incompatible-bdb
+	@echo "Building (this is slow)..."
+	@cd $(DOGECOIN_DIR) && $(MAKE)
+	@echo "Build complete: dogecoind/dogecoin-cli/dogecoin-tx in $(DOGECOIN_DIR)/src"
+
+cpp-test:
+	@echo "Compiling Litenyx consensus unit test..."
+	$(CXX) -std=c++20 -O0 -DKERRNYX_STANDALONE_TEST \
+		$(KERRNYX_INCLUDES) $(KERRNYX_TEST_SRC) -o $(KERRNYX_TEST_BIN) \
+		-lpthread $(BOOST_TEST) && \
+		echo "Running Litenyx consensus unit test..." && \
+		$(KERRNYX_TEST_BIN)
+
+cpp-compile-check:
+	@echo "Litenyx consensus is header-only integer math; no float check required."
+
+# Run the Python regtest harness (Phase 1 gate: single-chain mine/transact/reorg).
+regtest-test:
+	@echo "Running Litenyx regtest harness (test_litenyx_splitmerge.py)..."
+	@cd $(REPO_ROOT)/tests/regtest && \
+		python3 -m pytest test_litenyx_splitmerge.py -v
+
+# Alias to run both standalone cpp tests and the regtest harness.
+test-all: cpp-test regtest-test
+
+detect-env:
+	@echo "DOGECOIN_DIR=$(DOGECOIN_DIR)"
+	@echo "KERRNYX_INCLUDES=$(KERRNYX_INCLUDES)"

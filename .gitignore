@@ -1,0 +1,24 @@
+# Build / dependency artifacts
+external/
+deploy/external/
+build/
+out/
+
+# Binaries
+*.exe
+*.dll
+*.so
+*.o
+*.obj
+*.a
+*.lib
+
+# Test / coverage output
+*.log
+.pytest_cache/
+cpp_reference/test/test_litenyx
+KerrNyx-build-diag
+
+# Editor / OS
+.DS_Store
+*.swp
