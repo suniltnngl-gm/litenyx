@@ -66,9 +66,16 @@ def regtest_node():
     rpc_port = random.randint(20000, 40000)
     env = dict(os.environ)
 
-    # Run the daemon in -daemon mode (dogecoind always detaches regardless),
-    # capture its network debug.log for crash diagnosis.
+    # Launch the daemon WITHOUT -daemon so our Popen handle tracks the actual
+    # node process (dogecoind -daemon double-forks and the parent exits 0
+    # immediately, leaving us with a dead handle and no reliable liveness
+    # signal). Running in the foreground as a background Popen lets us:
+    #   * detect true death via proc.poll() (real exit code), and
+    #   * treat "couldn't connect" during warmup as NOT-yet-ready rather than
+    #     dead, so we never falsely declare "died during init".
+    daemon_out_path = os.path.join(datadir, "dogecoind.stdout.log")
     daemon_err_path = os.path.join(datadir, "dogecoind.stderr.log")
+    daemon_out = open(daemon_out_path, "w")
     daemon_err = open(daemon_err_path, "w")
     proc = subprocess.Popen(
         [
@@ -81,14 +88,12 @@ def regtest_node():
             f"-rpcport={rpc_port}",
             f"-rpcuser={RPC_USER}",
             f"-rpcpassword={RPC_PASSWORD}",
-            "-daemon",
             "-nolisten",
         ],
         env=env,
+        stdout=daemon_out,
         stderr=daemon_err,
     )
-    proc.wait(timeout=60)
-    daemon_err.close()
 
     cli = [
         LITENYX_CLI,
@@ -116,22 +121,32 @@ def regtest_node():
                         fh.write(src.read()[-20000:])
                 else:
                     fh.write("(no debug.log found under %s)\n" % datadir)
+                if os.path.exists(daemon_out_path):
+                    with open(daemon_out_path) as src:
+                        fh.write("---- daemon stdout ----\n" + src.read()[-8000:])
                 if os.path.exists(daemon_err_path):
                     with open(daemon_err_path) as src:
-                        fh.write("---- daemon stdout/stderr (foreground) ----\n" + src.read()[-15000:])
+                        fh.write("---- daemon stderr ----\n" + src.read()[-8000:])
+                fh.write("---- daemon proc.poll() = %s ----\n" % proc.poll())
             # Also keep a standalone copy for easy inspection.
             with open(os.path.join(_diag_dir, "litenyx_daemon_debug.log"), "a") as fh:
                 with open(_diag_log_path) as src:
                     fh.write(src.read())
         except Exception as e:
             pass
-    # Distinguish three RPC-failure modes:
-    #   - warmup (-28 "Loading..." / -26 "Startup in progress"): daemon ALIVE, keep waiting
-    #   - EOF / "couldn't connect": daemon is GONE (crashed or exited) -> raise _DaemonDead
-    #   - any other error: normal RPC error (propagate as RuntimeError)
+    # Liveness is determined by the OS process (proc.poll()), NOT by RPC
+    # reachability. During startup the RPC server is not yet bound, so
+    # "couldn't connect"/EOF is EXPECTED and means "still warming", not dead.
+    # A daemon is only truly dead when proc.poll() returns an exit code.
     class _DaemonDead(Exception):
         pass
+    _WARMUP_MARKERS = ("couldn't connect", "EOF", "code -28", "Loading",
+                       "code -26", "Startup")
     def _rpc(method, *args):
+        # If the OS process has exited, the daemon is genuinely dead.
+        rc = proc.poll()
+        if rc is not None:
+            raise _DaemonDead("%s: daemon process exited with code %s" % (method, rc))
         r = subprocess.run(
             cli + [method, *[str(a) for a in args]],
             capture_output=True,
@@ -140,9 +155,12 @@ def regtest_node():
         )
         if r.returncode != 0:
             err = r.stderr.strip()
-            if "couldn't connect" in err or "EOF" in err:
-                raise _DaemonDead(method + ": " + err)
-            if "code -28" in err or "Loading" in err or "code -26" in err or "Startup" in err:
+            # Re-check liveness: if the process died, report death regardless of
+            # the CLI error text.
+            if proc.poll() is not None:
+                raise _DaemonDead("%s: daemon process exited with code %s (%s)"
+                                  % (method, proc.poll(), err))
+            if any(m in err for m in _WARMUP_MARKERS):
                 raise RuntimeError("warmup: " + err)  # alive, still starting
             diag = "RPC %s FAILED rc=%d\nARGS=%s\nSTDERR=%s\nSTDOUT=%s\n" % (
                 method, r.returncode, args, err, r.stdout.strip())
@@ -155,9 +173,8 @@ def regtest_node():
         except json.JSONDecodeError:
             return out
 
-    # Wait for the daemon to finish warmup AND full initialization before
-    # issuing wallet RPCs. With -daemon the parent forks and exits 0, so we
-    # detect true death via the RPC "couldn't connect"/EOF signal.
+    # Poll getblockchaininfo until it succeeds. "couldn't connect" is warmup,
+    # not death; only proc.poll() != None (raised as _DaemonDead) is fatal.
     deadline = time.time() + 120
     ready = False
     while time.time() < deadline:
@@ -166,10 +183,10 @@ def regtest_node():
             ready = True
             break
         except _DaemonDead as e:
-            _dump_daemon_logs("daemon died during init: %s" % e)
+            _dump_daemon_logs("daemon process exited during init: %s" % e)
             raise RuntimeError("dogecoind died during init: %s" % e)
         except RuntimeError:
-            time.sleep(0.5)  # warmup
+            time.sleep(0.5)  # warmup (RPC not up yet)
     if not ready:
         _dump_daemon_logs("daemon never became ready within deadline")
         raise RuntimeError("dogecoind did not finish initialization within 120s")
@@ -198,6 +215,11 @@ def regtest_node():
         except subprocess.TimeoutExpired:
             proc.kill()
     _dump_daemon_logs("teardown")
+    try:
+        daemon_out.close()
+        daemon_err.close()
+    except Exception:
+        pass
     shutil.rmtree(datadir, ignore_errors=True)
 
 
