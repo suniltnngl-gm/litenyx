@@ -52,14 +52,16 @@ struct LitenyxAuxHeader {
     }
 
 #ifndef KERRNYX_STANDALONE_TEST
-    SERIALIZE_METHODS(LitenyxAuxHeader, obj)
-    {
-        READWRITE(obj.magic);
-        READWRITE(obj.chainId);
-        READWRITE(obj.eventHeight);
-        READWRITE(obj.auxAnchor);
-        READWRITE(obj.splitVector);
-        READWRITE(obj.reserved);
+    ADD_SERIALIZE_METHODS;
+
+    template <typename Stream, typename Operation>
+    inline void SerializationOp(Stream& s, Operation ser_action) {
+        READWRITE(magic);
+        READWRITE(chainId);
+        READWRITE(eventHeight);
+        READWRITE(auxAnchor);
+        READWRITE(splitVector);
+        READWRITE(reserved);
     }
 #endif
 
