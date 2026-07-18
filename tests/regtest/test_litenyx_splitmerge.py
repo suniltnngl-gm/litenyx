@@ -21,6 +21,7 @@ import json
 import os
 import random
 import shutil
+import time
 import subprocess
 import tempfile
 from pathlib import Path
@@ -104,6 +105,20 @@ def regtest_node():
             return json.loads(out)
         except json.JSONDecodeError:
             return out
+
+    # Wait for the daemon to finish warmup before issuing wallet RPCs.
+    # Error -28 (RPC_IN_WARMUP) is returned until initialization completes.
+    deadline = time.time() + 60
+    ready = False
+    while time.time() < deadline:
+        try:
+            _rpc("getnetworkinfo")
+            ready = True
+            break
+        except RuntimeError:
+            time.sleep(0.5)
+    if not ready:
+        raise RuntimeError("dogecoind did not finish warmup within 60s")
 
     _rpc("createwallet", "w")
     _rpc("generatetoaddress", 5, _rpc("getnewaddress"))
