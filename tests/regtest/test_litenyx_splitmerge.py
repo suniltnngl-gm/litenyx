@@ -102,18 +102,21 @@ def regtest_node():
 
     _diag_dir = os.environ.get("LITENYX_DIAG_DIR") or datadir
     _diag_log_path = os.path.join(_diag_dir, "litenyx_diag.log")
+    import glob as _glob
     def _dump_daemon_logs(why):
         try:
             # Mirror the daemon's own logs into the main diag file so the
             # existing artifact upload (path: litenyx_diag.log) captures them.
+            # With -datadir=X -regtest, dogecoin writes debug.log under
+            # X/regtest/debug.log (NOT X/debug.log), so search recursively.
+            dbg_candidates = _glob.glob(os.path.join(datadir, "**", "debug.log"), recursive=True)
             with open(_diag_log_path, "a") as fh:
                 fh.write("==== daemon logs (%s) ====\n" % why)
-                dbg = os.path.join(datadir, "debug.log")
-                if os.path.exists(dbg):
-                    with open(dbg) as src:
+                if dbg_candidates:
+                    with open(dbg_candidates[0]) as src:
                         fh.write(src.read()[-20000:])
                 else:
-                    fh.write("(no debug.log)\n")
+                    fh.write("(no debug.log found under %s)\n" % datadir)
                 if os.path.exists(daemon_err_path):
                     with open(daemon_err_path) as src:
                         fh.write("---- stderr ----\n" + src.read()[-10000:])
