@@ -1,5 +1,5 @@
 diff --git a/src/rpc/mining.cpp b/src/rpc/mining.cpp
-index 80530d2..418c153 100644
+index 80530d2..6b3434e 100644
 --- a/src/rpc/mining.cpp
 +++ b/src/rpc/mining.cpp
 @@ -20,6 +20,8 @@
@@ -22,7 +22,7 @@ index 80530d2..418c153 100644
  using namespace std;
  
  /**
-@@ -975,8 +981,87 @@ static const CRPCCommand commands[] =
+@@ -975,8 +981,94 @@ static const CRPCCommand commands[] =
      { "util",               "estimatepriority",       &estimatepriority,       true,  {"nblocks"} },
      { "util",               "estimatesmartfee",       &estimatesmartfee,       true,  {"nblocks"} },
      { "util",               "estimatesmartpriority",  &estimatesmartpriority,  true,  {"nblocks"} },
@@ -48,9 +48,16 @@ index 80530d2..418c153 100644
 +            "chainid: 0 or 1 (acceptance lane of the spend)\n"
 +            "outpoints: array of {\"txid\":hex,\"n\":num}\n");
 +
++    // Dogecoin's CLI may deliver numeric args as JSON strings; accept both a
++    // number (VNUM) and a string (VSTR) when reading integers.
++    auto litenyxGetInt = [](const UniValue& v) -> int {
++        if (v.isNum()) return v.get_int();
++        return atoi(v.get_str().c_str());
++    };
++
 +    try {
 +        std::string mode = request.params[0].get_str();
-+        uint8_t nChainId = (uint8_t)request.params[1].get_int();
++        uint8_t nChainId = (uint8_t)litenyxGetInt(request.params[1]);
 +
 +        UniValue out(UniValue::VOBJ);
 +        UniValue results(UniValue::VARR);
@@ -61,7 +68,7 @@ index 80530d2..418c153 100644
 +            bool allOk = true;
 +            for (const UniValue& e : request.params[2].get_array().getValues()) {
 +                uint256 txid = uint256S(e["txid"].get_str());
-+                uint32_t n = (uint32_t)e["n"].get_int();
++                uint32_t n = (uint32_t)litenyxGetInt(e["n"]);
 +                bool ok = LitenyxRecordSharedSpend(txid, n, nChainId);
 +                UniValue r(UniValue::VOBJ);
 +                r.pushKV("txid", txid.GetHex());
@@ -76,7 +83,7 @@ index 80530d2..418c153 100644
 +                throw JSONRPCError(RPC_INVALID_PARAMETER, "revert requires an outpoints array");
 +            for (const UniValue& e : request.params[2].get_array().getValues()) {
 +                uint256 txid = uint256S(e["txid"].get_str());
-+                uint32_t n = (uint32_t)e["n"].get_int();
++                uint32_t n = (uint32_t)litenyxGetInt(e["n"]);
 +                LitenyxRevertSharedSpend(txid, n);
 +                UniValue r(UniValue::VOBJ);
 +                r.pushKV("txid", txid.GetHex());
@@ -88,7 +95,7 @@ index 80530d2..418c153 100644
 +                throw JSONRPCError(RPC_INVALID_PARAMETER, "query requires an outpoints array");
 +            for (const UniValue& e : request.params[2].get_array().getValues()) {
 +                uint256 txid = uint256S(e["txid"].get_str());
-+                uint32_t n = (uint32_t)e["n"].get_int();
++                uint32_t n = (uint32_t)litenyxGetInt(e["n"]);
 +                UniValue r(UniValue::VOBJ);
 +                r.pushKV("txid", txid.GetHex());
 +                r.pushKV("n", (int)n);
