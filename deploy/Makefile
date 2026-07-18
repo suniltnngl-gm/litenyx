@@ -13,6 +13,8 @@ BOOST_TEST ?= -lboost_unit_test_framework
 KERRNYX_INCLUDES = -I$(REPO_ROOT) -I$(REPO_ROOT)/cpp_reference -I$(DOGECOIN_DIR)/src
 KERRNYX_TEST_SRC = $(REPO_ROOT)/cpp_reference/test/test_litenyx.cpp
 KERRNYX_TEST_BIN = $(REPO_ROOT)/cpp_reference/test/test_litenyx
+KERRNYX_TOPO_SRC = $(REPO_ROOT)/cpp_reference/test/test_litenyx_topology.cpp
+KERRNYX_TOPO_BIN = $(REPO_ROOT)/cpp_reference/test/test_litenyx_topology
 
 .PHONY: help cpp-test cpp-compile-check detect-env clone-dogecoin inject-hooks production-build regtest-test
 
@@ -65,12 +67,18 @@ production-build: inject-hooks
 	@echo "Build complete: dogecoind/dogecoin-cli/dogecoin-tx in $(DOGECOIN_DIR)/src"
 
 cpp-test:
-	@echo "Compiling Litenyx consensus unit test..."
+	@echo "Compiling Litenyx consensus unit test (Phase 2)..."
 	$(CXX) -std=c++20 -O0 -DKERRNYX_STANDALONE_TEST \
 		$(KERRNYX_INCLUDES) $(KERRNYX_TEST_SRC) -o $(KERRNYX_TEST_BIN) \
 		-lpthread $(BOOST_TEST) && \
-		echo "Running Litenyx consensus unit test..." && \
+		echo "Running Litenyx consensus unit test (Phase 2)..." && \
 		$(KERRNYX_TEST_BIN)
+	@echo "Compiling Litenyx topology unit test (Phase 3)..."
+	$(CXX) -std=c++20 -O0 -DKERRNYX_STANDALONE_TEST \
+		$(KERRNYX_INCLUDES) $(KERRNYX_TOPO_SRC) -o $(KERRNYX_TOPO_BIN) \
+		-lpthread $(BOOST_TEST) && \
+		echo "Running Litenyx topology unit test (Phase 3)..." && \
+		$(KERRNYX_TOPO_BIN)
 
 cpp-compile-check:
 	@echo "Litenyx consensus is header-only integer math; no float check required."
