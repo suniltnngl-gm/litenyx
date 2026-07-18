@@ -1,0 +1,97 @@
+﻿diff --git a/src/rpc/mining.cpp b/src/rpc/mining.cpp
+index 80530d2..422c3ca 100644
+--- a/src/rpc/mining.cpp
++++ b/src/rpc/mining.cpp
+@@ -18,6 +18,8 @@
+ #include "validation.h"
+ #include "miner.h"
+ #include "net.h"
++#include "litenyx/LITENYX_sharedstate.h"
++#include "litenyx/LITENYX_auxpow.h"
+ #include "pow.h"
+ #include "rpc/server.h"
+ #include "txmempool.h"
+@@ -975,8 +977,83 @@ static const CRPCCommand commands[] =
+     { "util",               "estimatepriority",       &estimatepriority,       true,  {"nblocks"} },
+     { "util",               "estimatesmartfee",       &estimatesmartfee,       true,  {"nblocks"} },
+     { "util",               "estimatesmartpriority",  &estimatesmartpriority,  true,  {"nblocks"} },
++
++    { "litenyx",            "testlitenyxsharedstate",  &testlitenyxsharedstate,  true,  {"mode","chainid","outpoints"} },
+ };
+ 
++/** Litenyx Phase 2 regtest-only RPC: exercise the REAL global shared spent-set
++ *  (the same module ConnectBlock/DisconnectBlock use) to prove the invariant
++ *    Spend(U, Chain_A) => NOT Spend(U, Chain_B)
++ *  and reorg-safe rollback, without needing full block construction.
++ *
++ *  Arguments: a mode ("record" | "revert" | "query"), a chainId (0..1), and an
++ *  array of {txid, n} outpoints. Returns per-outpoint spent/confirming-chain.
++ */
++UniValue testlitenyxsharedstate(const JSONRPCRequest& request)
++{
++    if (request.fHelp || request.params.size() < 2)
++        throw std::runtime_error(
++            "testlitenyxsharedstate \"mode\" chainid [\"outpoints\"]\n"
++            "\nExercise the Litenyx global shared spent-set used by ConnectBlock.\n"
++            "\nmode:    \"record\" | \"revert\" | \"query\"\n"
++            "chainid: 0 or 1 (acceptance lane of the spend)\n"
++            "outpoints: array of {\"txid\":hex,\"n\":num}\n");
++
++    std::string mode = request.params[0].get_str();
++    uint8_t nChainId = (uint8_t)request.params[1].get_int();
++
++    UniValue out(UniValue::VOBJ);
++    UniValue results(UniValue::VARR);
++
++    if (mode == "record") {
++        if (request.params.size() < 3 || !request.params[2].isArray())
++            throw JSONRPCError(RPC_INVALID_PARAMETER, "record requires an outpoints array");
++        bool allOk = true;
++        for (const UniValue& e : request.params[2].get_array().getValues()) {
++            uint256 txid = uint256S(e["txid"].get_str());
++            uint32_t n = (uint32_t)e["n"].get_int();
++            bool ok = LitenyxRecordSharedSpend(txid, n, nChainId);
++            UniValue r(UniValue::VOBJ);
++            r.pushKV("txid", txid.GetHex());
++            r.pushKV("n", (int)n);
++            r.pushKV("accepted", ok);
++            results.push_back(r);
++            if (!ok) allOk = false;
++        }
++        out.pushKV("all_accepted", allOk);
++    } else if (mode == "revert") {
++        if (request.params.size() < 3 || !request.params[2].isArray())
++            throw JSONRPCError(RPC_INVALID_PARAMETER, "revert requires an outpoints array");
++        for (const UniValue& e : request.params[2].get_array().getValues()) {
++            uint256 txid = uint256S(e["txid"].get_str());
++            uint32_t n = (uint32_t)e["n"].get_int();
++            LitenyxRevertSharedSpend(txid, n);
++            UniValue r(UniValue::VOBJ);
++            r.pushKV("txid", txid.GetHex());
++            r.pushKV("n", (int)n);
++            results.push_back(r);
++        }
++    } else if (mode == "query") {
++        if (request.params.size() < 3 || !request.params[2].isArray())
++            throw JSONRPCError(RPC_INVALID_PARAMETER, "query requires an outpoints array");
++        for (const UniValue& e : request.params[2].get_array().getValues()) {
++            uint256 txid = uint256S(e["txid"].get_str());
++            uint32_t n = (uint32_t)e["n"].get_int();
++            UniValue r(UniValue::VOBJ);
++            r.pushKV("txid", txid.GetHex());
++            r.pushKV("n", (int)n);
++            r.pushKV("spent", LitenyxIsSharedSpent(txid, n));
++            r.pushKV("confirming_chain", (int)LitenyxConfirmingChain(txid, n));
++            results.push_back(r);
++        }
++    } else {
++        throw JSONRPCError(RPC_INVALID_PARAMETER, "unknown mode (record|revert|query)");
++    }
++
++    out.pushKV("results", results);
++    return out;
++}
++
+ void RegisterMiningRPCCommands(CRPCTable &t)
+ {
+     for (unsigned int vcidx = 0; vcidx < ARRAYLEN(commands); vcidx++)

@@ -42,6 +42,15 @@ struct LitenyxAuxHeader {
     void SetMagic() { magic = LITENYX_AUX_MAGIC; }
     bool HasMagic() const { return magic == LITENYX_AUX_MAGIC; }
 
+    void SetNull() {
+        magic = 0;
+        chainId = 0;
+        eventHeight = 0;
+        auxAnchor = uint256();
+        splitVector = 0;
+        reserved = 0;
+    }
+
 #ifndef KERRNYX_STANDALONE_TEST
     SERIALIZE_METHODS(LitenyxAuxHeader, obj)
     {

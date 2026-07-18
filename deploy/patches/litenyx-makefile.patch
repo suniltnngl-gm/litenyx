@@ -1,0 +1,13 @@
+﻿diff --git a/src/Makefile.am b/src/Makefile.am
+index 2e12b64..17491df 100644
+--- a/src/Makefile.am
++++ b/src/Makefile.am
+@@ -227,6 +227,8 @@ libdogecoin_server_a_SOURCES = \
+   txrequest.cpp \
+   ui_interface.cpp \
+   validation.cpp \
++  litenyx/LITENYX_sharedstate.cpp \
++  litenyx/LITENYX_validation.cpp \
+   validationinterface.cpp \
+   versionbits.cpp \
+   $(BITCOIN_CORE_H)

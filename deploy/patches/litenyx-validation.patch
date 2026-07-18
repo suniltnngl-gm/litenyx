@@ -1,0 +1,40 @@
+﻿diff --git a/src/validation.cpp b/src/validation.cpp
+index 97d4ff5..7bbe9d0 100644
+--- a/src/validation.cpp
++++ b/src/validation.cpp
+@@ -34,6 +34,7 @@
+ #include "txmempool.h"
+ #include "ui_interface.h"
+ #include "undo.h"
++#include "litenyx/LITENYX_validation.h"
+ #include "util.h"
+ #include "utilmoneystr.h"
+ #include "utilstrencodings.h"
+@@ -1683,6 +1684,10 @@ bool DisconnectBlock(const CBlock& block, CValidationState& state, const CBlockI
+         }
+     }
+ 
++    // Litenyx Phase 2: roll back exactly the global shared-state transitions this
++    // block introduced, so reorgs undo prior history before new history applies.
++    LitenyxDisconnectSharedState(block);
++
+     // move best block pointer to prevout block
+     view.SetBestBlock(pindex->pprev->GetBlockHash());
+ 
+@@ -2033,6 +2038,16 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
+     // add this block to the view's block chain
+     view.SetBestBlock(pindex->GetBlockHash());
+ 
++    // Litenyx Phase 2: validate the aux header (chainId lane + same-chain anchor)
++    // then enforce the global shared spent-set across all chains. A cross-chain
++    // double spend (same outpoint on a different chainId) is rejected here.
++    if (!LitenyxCheckAuxHeader(block, pindex->pprev, state)) {
++        return false;
++    }
++    if (!LitenyxConnectSharedState(block, state)) {
++        return false;
++    }
++
+     int64_t nTime5 = GetTimeMicros(); nTimeIndex += nTime5 - nTime4;
+     LogPrint("bench", "    - Index writing: %.2fms [%.2fs]\n", 0.001 * (nTime5 - nTime4), nTimeIndex * 0.000001);
+ 

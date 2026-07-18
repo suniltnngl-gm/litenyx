@@ -37,6 +37,17 @@ inject-hooks: clone-dogecoin
 	@mkdir -p $(DOGECOIN_DIR)/src/litenyx
 	@cp $(REPO_ROOT)/litenyx/LITENYX_types.h $(DOGECOIN_DIR)/src/litenyx/LITENYX_types.h
 	@cp $(REPO_ROOT)/litenyx/LITENYX_auxpow.h $(DOGECOIN_DIR)/src/litenyx/LITENYX_auxpow.h
+	@cp $(REPO_ROOT)/litenyx/LITENYX_identity.h $(DOGECOIN_DIR)/src/litenyx/LITENYX_identity.h
+	@cp $(REPO_ROOT)/litenyx/LITENYX_sharedstate.h $(DOGECOIN_DIR)/src/litenyx/LITENYX_sharedstate.h
+	@cp $(REPO_ROOT)/litenyx/LITENYX_sharedstate.cpp $(DOGECOIN_DIR)/src/litenyx/LITENYX_sharedstate.cpp
+	@cp $(REPO_ROOT)/litenyx/LITENYX_validation.h $(DOGECOIN_DIR)/src/litenyx/LITENYX_validation.h
+	@cp $(REPO_ROOT)/litenyx/LITENYX_validation.cpp $(DOGECOIN_DIR)/src/litenyx/LITENYX_validation.cpp
+	@echo "Applying litenyx patches..."
+	@git -C $(DOGECOIN_DIR) apply $(REPO_ROOT)/deploy/patches/litenyx-identity.patch || true
+	@git -C $(DOGECOIN_DIR) apply $(REPO_ROOT)/deploy/patches/litenyx-block-aux.patch || true
+	@git -C $(DOGECOIN_DIR) apply $(REPO_ROOT)/deploy/patches/litenyx-validation.patch || true
+	@git -C $(DOGECOIN_DIR) apply $(REPO_ROOT)/deploy/patches/litenyx-rpc.patch || true
+	@git -C $(DOGECOIN_DIR) apply $(REPO_ROOT)/deploy/patches/litenyx-makefile.patch || true
 	@echo "Litenyx hooks injected."
 
 production-build: inject-hooks

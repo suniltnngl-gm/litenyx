@@ -1,0 +1,38 @@
+﻿diff --git a/src/primitives/block.h b/src/primitives/block.h
+index 5d1938e..c419523 100644
+--- a/src/primitives/block.h
++++ b/src/primitives/block.h
+@@ -9,6 +9,7 @@
+ 
+ #include "auxpow.h"
+ #include "primitives/transaction.h"
++#include "litenyx/LITENYX_auxpow.h"
+ #include "primitives/pureheader.h"
+ #include "serialize.h"
+ #include "uint256.h"
+@@ -25,6 +26,9 @@ class CBlockHeader : public CPureBlockHeader
+ public:
+     // auxpow (if this is a merge-minded block)
+     std::shared_ptr<CAuxPow> auxpow;
++    // Litenyx aux extension (Phase 2 shared-state multi-chain). Carries the
++    // chainId (acceptance lane) and a same-chain anchor. Always present.
++    LitenyxAuxHeader nyx_aux;
+ 
+     CBlockHeader()
+     {
+@@ -36,6 +40,7 @@ public:
+     template <typename Stream, typename Operation>
+     inline void SerializationOp(Stream& s, Operation ser_action) {
+         READWRITE(*(CPureBlockHeader*)this);
++        READWRITE(nyx_aux);
+ 
+         if (this->IsAuxpow())
+         {
+@@ -51,6 +56,7 @@ public:
+     {
+         CPureBlockHeader::SetNull();
+         auxpow.reset();
++        nyx_aux.SetNull();
+     }
+ 
+     /**

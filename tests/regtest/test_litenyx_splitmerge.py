@@ -32,6 +32,17 @@ LITENYX_CLI = (
     os.environ.get("LITENYX_CLI_BIN") or shutil.which("dogecoin-cli") or "dogecoin-cli"
 )
 
+# In CI the built binary path is passed explicitly. If it isn't on PATH we still
+# try shutil.which; only skip when genuinely absent.
+def _resolve(bin_env, name):
+    if bin_env and os.path.exists(bin_env):
+        return bin_env
+    found = shutil.which(name)
+    return found or name
+
+LITENYXD = _resolve(os.environ.get("LITENYXD_BIN"), "dogecoind")
+LITENYX_CLI = _resolve(os.environ.get("LITENYX_CLI_BIN"), "dogecoin-cli")
+
 RPC_USER = "Litenyx"
 RPC_PASSWORD = "litenyxtest"
 
@@ -99,8 +110,70 @@ def regtest_node():
     shutil.rmtree(datadir, ignore_errors=True)
 
 
-def test_node_reachable_and_mining(regtest_node):
-    """Phase 1 gate (skeleton): node mines and reports a positive height."""
+def _outpoints(specs):
+    """specs: list of (txid_hex, n). Returns a JSON array of {txid, n}."""
+    return [{"txid": t, "n": n} for (t, n) in specs]
+
+
+def test_phase1_node_reachable_and_mining(regtest_node):
+    """Phase 1 gate: node mines and reports a positive height."""
     height = regtest_node("getblockcount")
     assert isinstance(height, int)
     assert height >= 5
+
+
+def test_phase2_cross_chain_double_spend_excluded(regtest_node):
+    """CORE GATE (spec §3):
+
+        Spend(U, Chain_A) Accepted
+        => Spend(U, Chain_B) Rejected
+
+    We drive the SAME global shared spent-set that ConnectBlock uses, via the
+    regtest-only RPC. Spending outpoint U on chain 0 must make the conflicting
+    spend on chain 1 rejected.
+    """
+    U = ("aa" * 32, 0)
+    # Spend U on Chain_A (chainId 0).
+    res = regtest_node("testlitenyxsharedstate", "record", 0, _outpoints([U]))
+    assert res["all_accepted"] is True, f"first spend rejected: {res}"
+
+    # Conflicting spend of the SAME U on Chain_B (chainId 1) must be rejected.
+    res = regtest_node("testlitenyxsharedstate", "record", 1, _outpoints([U]))
+    assert res["all_accepted"] is False, f"cross-chain double spend NOT excluded: {res}"
+
+    # Query confirms U is globally spent (regardless of lane).
+    q = regtest_node("testlitenyxsharedstate", "query", 0, _outpoints([U]))
+    assert q["results"][0]["spent"] is True
+
+
+def test_phase2_distinct_outpoints_independent(regtest_node):
+    """Different outpoints spend independently on either chain."""
+    A = ("bb" * 32, 0)
+    B = ("cc" * 32, 0)
+    regtest_node("testlitenyxsharedstate", "record", 0, _outpoints([A]))
+    regtest_node("testlitenyxsharedstate", "record", 1, _outpoints([B]))
+    q = regtest_node("testlitenyxsharedstate", "query", 0, _outpoints([A, B]))
+    assert q["results"][0]["spent"] is True
+    assert q["results"][1]["spent"] is True
+
+
+def test_phase2_reorg_rolls_back_shared_state(regtest_node):
+    """REORG GATE (canonical-history aware, not an irreversible flag):
+
+        Reorg(A) rolls back the global spend state correctly,
+        => a NEW canonical spend of U on Chain_B may become valid again.
+    """
+    U = ("dd" * 32, 0)
+    # Spend U on chain 0.
+    regtest_node("testlitenyxsharedstate", "record", 0, _outpoints([U]))
+    q = regtest_node("testlitenyxsharedstate", "query", 0, _outpoints([U]))
+    assert q["results"][0]["spent"] is True
+
+    # Simulate a reorg that disconnects the block that spent U: revert it.
+    regtest_node("testlitenyxsharedstate", "revert", 0, _outpoints([U]))
+    q = regtest_node("testlitenyxsharedstate", "query", 0, _outpoints([U]))
+    assert q["results"][0]["spent"] is False, "reorg did not roll back global spend state"
+
+    # After rollback, U may be spent again — now canonically on Chain_B.
+    res = regtest_node("testlitenyxsharedstate", "record", 1, _outpoints([U]))
+    assert res["all_accepted"] is True, f"post-reorg spend rejected: {res}"

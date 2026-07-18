@@ -1,0 +1,30 @@
+﻿diff --git a/src/chainparams.cpp b/src/chainparams.cpp
+index 5f8ebaa..3a31902 100644
+--- a/src/chainparams.cpp
++++ b/src/chainparams.cpp
+@@ -414,7 +414,7 @@ public:
+         consensus.defaultAssumeValid = uint256S("0x00");
+ 
+         // AuxPow parameters
+-        consensus.nAuxpowChainId = 0x0062; // 98 - Josh Wise!
++        consensus.nAuxpowChainId = 0x4c59; // Litenyx "LY"
+         consensus.fStrictChainId = true;
+         consensus.fAllowLegacyBlocks = true;
+ 
+@@ -436,11 +436,11 @@ public:
+         digishieldConsensus.pRight = &auxpowConsensus;
+         pConsensusRoot = &digishieldConsensus;
+ 
+-        pchMessageStart[0] = 0xfa;
+-        pchMessageStart[1] = 0xbf;
+-        pchMessageStart[2] = 0xb5;
+-        pchMessageStart[3] = 0xda;
+-        nDefaultPort = 18444;
++        pchMessageStart[0] = 0x6c; // "l"
++        pchMessageStart[1] = 0x79; // "y"
++        pchMessageStart[2] = 0x78; // "x"
++        pchMessageStart[3] = 0x58; // "X"
++        nDefaultPort = 18455;
+         nPruneAfterHeight = 1000;
+ 
+         genesis = CreateGenesisBlock(1296688602, 2, 0x207fffff, 1, 88 * COIN);
