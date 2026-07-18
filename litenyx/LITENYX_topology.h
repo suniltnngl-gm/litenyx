@@ -65,6 +65,10 @@ struct LitenyxChainObservation {
     int32_t M_c = 0; // normalized demand pressure for chain c, 0..100
 };
 
+// A per-chain observation vector (index == chainId). Defined here so both the
+// daemon tracker and the standalone proof share the exact same type.
+using LitenyxObservations = std::vector<LitenyxChainObservation>;
+
 // ---- Pure observatory ------------------------------------------------------
 // Aggregate absolute load A = mean_c(M_c). Defined for any N >= 1.
 inline int32_t LitenyxTopoAggregateLoad(

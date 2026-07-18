@@ -22,8 +22,6 @@
 #include <set>
 #include <string>
 
-using LitenyxObservations = std::vector<LitenyxChainObservation>;
-
 // A "canonical history" is a deterministic function: for each height, the
 // per-chain observations are recorded. We model it as a map height->obs so a
 // reorg can swap a suffix and we can re-derive the trajectory.
