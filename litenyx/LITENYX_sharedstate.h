@@ -35,7 +35,7 @@ struct LitenyxOutPoint {
 namespace std {
 template <> struct hash<LitenyxOutPoint> {
     size_t operator()(const LitenyxOutPoint& o) const {
-        return o.hash.GetHash().GetCheapHash() ^ o.n;
+        return o.hash.GetCheapHash() ^ o.n;
     }
 };
 } // namespace std

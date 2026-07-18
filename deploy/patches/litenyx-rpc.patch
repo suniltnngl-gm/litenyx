@@ -1,17 +1,22 @@
 diff --git a/src/rpc/mining.cpp b/src/rpc/mining.cpp
-index 80530d2..422c3ca 100644
+index 80530d2..e7f7359 100644
 --- a/src/rpc/mining.cpp
 +++ b/src/rpc/mining.cpp
-@@ -18,6 +18,8 @@
+@@ -18,7 +18,13 @@
  #include "validation.h"
  #include "miner.h"
  #include "net.h"
 +#include "litenyx/LITENYX_sharedstate.h"
 +#include "litenyx/LITENYX_auxpow.h"
  #include "pow.h"
++
++// Forward declaration so the commands[] table below can reference the
++// Litenyx shared-state test RPC defined later in this file.
++UniValue testlitenyxsharedstate(const JSONRPCRequest& request);
  #include "rpc/server.h"
  #include "txmempool.h"
-@@ -975,8 +977,83 @@ static const CRPCCommand commands[] =
+ #include "util.h"
+@@ -975,8 +981,83 @@ static const CRPCCommand commands[] =
      { "util",               "estimatepriority",       &estimatepriority,       true,  {"nblocks"} },
      { "util",               "estimatesmartfee",       &estimatesmartfee,       true,  {"nblocks"} },
      { "util",               "estimatesmartpriority",  &estimatesmartpriority,  true,  {"nblocks"} },
