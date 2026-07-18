@@ -23,17 +23,17 @@ bool LitenyxCheckAuxHeader(const CBlock& block, const CBlockIndex* pindexPrev,
         return true;
     }
     if (aux.reserved != 0) {
-        return state.Invalid(false, "bad-Litenyx-auxreserved",
+        return state.Invalid(false, 0,
                              "Litenyx aux reserved must be zero");
     }
     if (aux.chainId >= LITENYX_MAX_CHAINS) {
-        return state.Invalid(false, "bad-Litenyx-chainid",
+        return state.Invalid(false, 0,
                              "Litenyx chainId out of range");
     }
     if (pindexPrev) {
         uint256 parentTip = pindexPrev->GetBlockHash();
         if (aux.auxAnchor != parentTip) {
-            return state.Invalid(false, "bad-Litenyx-auxanchor",
+            return state.Invalid(false, 0,
                                  "Litenyx aux anchor does not commit to parent tip");
         }
     }
@@ -50,7 +50,7 @@ bool LitenyxConnectSharedState(const CBlock& block, CValidationState& state)
         if (tx->IsCoinBase()) continue;
         for (const CTxIn& txin : tx->vin) {
             if (LitenyxIsSharedSpent(txin.prevout.hash, txin.prevout.n)) {
-                return state.Invalid(false, "bad-Litenyx-sharedspend",
+                return state.Invalid(false, 0,
                                      "Litenyx global double spend (cross-chain) rejected");
             }
         }
