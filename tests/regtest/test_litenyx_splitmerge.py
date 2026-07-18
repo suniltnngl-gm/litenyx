@@ -120,7 +120,7 @@ def regtest_node():
                     fh.write("(no debug.log found under %s)\n" % datadir)
                 if os.path.exists(daemon_err_path):
                     with open(daemon_err_path) as src:
-                        fh.write("---- stderr ----\n" + src.read()[-10000:])
+                        fh.write("---- daemon stdout/stderr (foreground) ----\n" + src.read()[-15000:])
             # Also keep a standalone copy for easy inspection.
             with open(os.path.join(_diag_dir, "litenyx_daemon_debug.log"), "a") as fh:
                 with open(_diag_log_path) as src:
