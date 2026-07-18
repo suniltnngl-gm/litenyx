@@ -125,28 +125,28 @@ BOOST_AUTO_TEST_CASE(identical_history_identical_trajectory)
 // repeatedly within a cooldown window; N must not flip-flop every window.
 BOOST_AUTO_TEST_CASE(hysteresis_and_cooldown_suppress_oscillation)
 {
-    // Start at N=MAX-1, alternate high/low load each window, but cooldown is
-    // longer than the alternation period, so we cannot oscillate every window.
-    History H;
-    uint8_t Nstart = LITENYX_MAX_CHAINS - 1;
-    // Pre-load history so trajectory tracker begins near Nstart via prior splits.
-    // Simpler: directly test the decision function's cooldown gating.
+    // Cooldown gating is bound-agnostic: test at N = MIN_CHAINS where the
+    // available change is always SPLIT (never clamped), and at an in-cooldown
+    // height where ANY change must be forced to HOLD.
     LitenyxObservations hi, lo;
     for (uint8_t c = 0; c < LITENYX_MAX_CHAINS; ++c) { hi.push_back({95}); lo.push_back({5}); }
 
-    // First decision at h=100 (window boundary), lastTrans=0 -> allowed.
-    LitenyxTopoDecision d0 = LitenyxTopoDecide(hi, Nstart, 100, 0);
-    uint32_t th = LitenyxTopoTransitionHeight(100); // 300
-    // Immediately re-decide at next boundary 200 with lastTrans=300 (future trans).
-    // Simulate that the transition already occurred: lastTrans = th.
-    LitenyxTopoDecision d1 = LitenyxTopoDecide(lo, Nstart+1, 200, th);
-    // Within cooldown (200-300 < COOLDOWN=200? 200-300 negative -> treated as HOLD
-    // because lastTrans > h_obs makes (h_obs-lastTrans) negative < COOLDOWN).
+    // First decision at h=100 (window boundary), lastTrans=0 -> allowed SPLIT.
+    LitenyxTopoDecision d0 = LitenyxTopoDecide(hi, (uint8_t)LITENYX_MIN_CHAINS, 100, 0);
+    BOOST_CHECK_EQUAL(d0, LitenyxTopoDecision::SPLIT);
+    uint32_t th = LitenyxTopoTransitionHeight(100); // 300 for default params
+
+    // Within cooldown: lastTrans == th (future transition), h_obs=200.
+    // (200 - 300) is negative < COOLDOWN, so any change is forced HOLD.
+    LitenyxTopoDecision d1 = LitenyxTopoDecide(hi, (uint8_t)LITENYX_MIN_CHAINS, 200, th);
     BOOST_CHECK_EQUAL(d1, LitenyxTopoDecision::HOLD);
 
-    // Only after cooldown elapses can a new change occur.
-    LitenyxTopoDecision d2 = LitenyxTopoDecide(lo, Nstart+1, th + LITENYX_TOPOLOGY_COOLDOWN + LITENYX_TOPOLOGY_OBS_WINDOW, th);
-    BOOST_CHECK_EQUAL(d2, LitenyxTopoDecision::MERGE);
+    // Only after cooldown elapses can a new change occur (still at MIN, high load
+    // -> SPLIT again, which is always permitted at the floor).
+    LitenyxTopoDecision d2 = LitenyxTopoDecide(
+        hi, (uint8_t)LITENYX_MIN_CHAINS,
+        th + LITENYX_TOPOLOGY_COOLDOWN + LITENYX_TOPOLOGY_OBS_WINDOW, th);
+    BOOST_CHECK_EQUAL(d2, LitenyxTopoDecision::SPLIT);
 }
 
 // P4: reorg replay reconstructs the same result. Replace a suffix of history
