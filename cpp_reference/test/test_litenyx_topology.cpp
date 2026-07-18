@@ -10,6 +10,7 @@
 
 #include <litenyx/LITENYX_topology.h>
 #include <litenyx/LITENYX_types.h>
+#include <litenyx/LITENYX_auxpow.h>  // uint256 / uint256S shim (standalone test)
 
 #define BOOST_TEST_MODULE LITENYX_topo_test
 #include <boost/test/included/unit_test.hpp>

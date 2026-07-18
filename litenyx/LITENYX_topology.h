@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <vector>
 #include <algorithm>
+#include <ostream>
 
 #include "LITENYX_types.h"
 
@@ -37,6 +38,16 @@ enum class LitenyxTopoDecision {
     SPLIT = 1,   // N -> N+1
     MERGE = 2,   // N -> N-1
 };
+
+// Allowed in BOOST_CHECK_EQUAL / diagnostics.
+inline std::ostream& operator<<(std::ostream& os, LitenyxTopoDecision d) {
+    switch (d) {
+        case LitenyxTopoDecision::HOLD:  return os << "HOLD";
+        case LitenyxTopoDecision::SPLIT: return os << "SPLIT";
+        case LitenyxTopoDecision::MERGE: return os << "MERGE";
+    }
+    return os << "?<" << (int)d << ">";
+}
 
 // A block observation record for one chain over the window. We store only what
 // the observatory needs: fullness and fee pressure, already normalized to an
