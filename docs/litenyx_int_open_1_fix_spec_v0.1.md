@@ -345,8 +345,14 @@ legitimate SSS publish point is the non-failure-capable tail (post-2348, at/afte
 the `master` clone is now pinned to v1.14.9 (`e0a1c157…`) via `DOGECOIN_PIN` before
 implementation. No Phase-2 code written; no invariant reopened; M3 R1–R3 unchanged.
 
-Implementation-track status: INT-OPEN-1 = SPECIFIED / IMPLEMENTATION-PENDING with the
-`ConnectTip` attach points now VERIFIED. Next: produce the M3 implementation map
-(stage/discard/publish attach), then implement + KAT/integration tests proving
-`ConnectBlock(B)=Reject ⇒ SSS_after = SSS_before` at P4/P5/P6 and the post-`ConnectBlock`
-`FlushStateToDisk` failure point.
+Implementation-track status (updated): INT-OPEN-1 = IMPLEMENTATION-DONE / KAT-VERIFIED.
+M3 implemented (commit 476f875): attempt-scoped candidate delta, staged in
+ConnectBlock, published only at the verified ConnectTip post-FlushStateToDisk tail.
+Class-level KAT (test_litenyx_shared_delta.cpp) = 6/6 PASS against the REAL classes.
+INT-Q5 pinned (commit 5586b07): Dogecoin Core v1.14.9 @ e0a1c157791544e818c901bd9341896965afbf9d.
+G1-G3 daemon integration: AUTHORED but NOT YET EXECUTED (no dogecoind build is
+possible in this local MSYS2/UCRT64 install - missing make/autotools/BDB/libevent/
+OpenSSL dev headers). The harness (tests/regtest/test_litenyx_m3_integration.py) plus
+the debug-only forced-flush hook + testlitenyxforceflushfail RPC are ready to run on
+CI. Classification MUST NOT advance to RESOLVED / VERIFIED until G1-G3 pass against
+the built pinned debug daemon.

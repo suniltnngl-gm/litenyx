@@ -1,8 +1,8 @@
 diff --git a/src/validation.cpp b/src/validation.cpp
-index 97d4ff5..9fef3cf 100644
+index a0541361b..2cccfcb77 100644
 --- a/src/validation.cpp
 +++ b/src/validation.cpp
-@@ -34,6 +34,9 @@
+@@ -33,6 +33,9 @@
  #include "txmempool.h"
  #include "ui_interface.h"
  #include "undo.h"
@@ -12,7 +12,24 @@ index 97d4ff5..9fef3cf 100644
  #include "util.h"
  #include "utilmoneystr.h"
  #include "utilstrencodings.h"
-@@ -1683,6 +1686,24 @@ bool DisconnectBlock(const CBlock& block, CValidationState& state, const CBlockI
+@@ -40,6 +43,16 @@
+ #include "versionbits.h"
+ #include "warnings.h"
+ 
++#include <atomic>
++
++// Litenyx INT-OPEN-1 / M3 integration test hook (G1). When armed (debug builds
++// only), the NEXT ConnectTip that reaches its post-flush tail returns false to
++// simulate a FlushStateToDisk failure AFTER ConnectBlock succeeded. Exchanged
++// (reset-on-consume) so exactly one connect is affected. Release (-NDEBUG) builds
++// never consult it. The regtest RPC testlitenyxforceflushfail arms it.
++static std::atomic<bool> g_litenyxForceFlushFail{false};
++void LitenyxArmForceFlushFail(bool arm) { g_litenyxForceFlushFail.store(arm); }
++
+ #include <atomic>
+ #include <sstream>
+ 
+@@ -1684,6 +1697,24 @@ bool DisconnectBlock(const CBlock& block, CValidationState& state, const CBlockI
          }
      }
  
@@ -37,7 +54,7 @@ index 97d4ff5..9fef3cf 100644
      // move best block pointer to prevout block
      view.SetBestBlock(pindex->pprev->GetBlockHash());
  
-@@ -2033,6 +2054,77 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
+@@ -2034,6 +2065,77 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
      // add this block to the view's block chain
      view.SetBestBlock(pindex->GetBlockHash());
  
@@ -115,7 +132,7 @@ index 97d4ff5..9fef3cf 100644
      int64_t nTime5 = GetTimeMicros(); nTimeIndex += nTime5 - nTime4;
      LogPrint("bench", "    - Index writing: %.2fms [%.2fs]\n", 0.001 * (nTime5 - nTime4), nTimeIndex * 0.000001);
  
-@@ -2313,6 +2405,13 @@ bool static ConnectTip(CValidationState& state, const CChainParams& chainparams,
+@@ -2314,6 +2416,13 @@ bool static ConnectTip(CValidationState& state, const CChainParams& chainparams,
  {
      assert(pindexNew->pprev == chainActive.Tip());
      // Read block from disk.
@@ -129,10 +146,21 @@ index 97d4ff5..9fef3cf 100644
      int64_t nTime1 = GetTimeMicros();
      if (!pblock) {
          std::shared_ptr<CBlock> pblockNew = std::make_shared<CBlock>();
-@@ -2353,5 +2452,12 @@ bool static ConnectTip(CValidationState& state, const CChainParams& chainparams,
+@@ -2353,6 +2462,24 @@ bool static ConnectTip(CValidationState& state, const CChainParams& chainparams,
      mempool.removeForBlock(blockConnecting.vtx, pindexNew->nHeight);
      // Update chainActive & related variables.
      UpdateTip(pindexNew, chainparams);
++#ifndef NDEBUG
++    // Litenyx INT-OPEN-1 / M3 INTEGRATION TEST HOOK (G1): if a test armed the
++    // forced chainstate-flush failure, simulate FlushStateToDisk failing AFTER
++    // ConnectBlock succeeded and AFTER the real flush. Return false WITHOUT
++    // publishing the staged delta, exercising the exact INT-Q4 failure window:
++    // ConnectBlock OK + flush "fails" => the attempt-scoped delta must discard
++    // and leave the live shared set unchanged. Debug builds only; never in -NDEBUG.
++    if (g_litenyxForceFlushFail.exchange(false)) {
++        return false;
++    }
++#endif
 +    // Litenyx INT-OPEN-1 / M3: the last failure-capable step (FlushStateToDisk,
 +    // above) has succeeded and the tip has been updated; this block is now
 +    // canonical and connection cannot fail. Publish the staged candidate delta to
@@ -142,4 +170,4 @@ index 97d4ff5..9fef3cf 100644
 +    litenyxSpendScope.PublishActive();
  
      int64_t nTime6 = GetTimeMicros(); nTimePostConnect += nTime6 - nTime5; nTimeTotal += nTime6 - nTime1;
- 
+     LogPrint("bench", "  - Connect postprocess: %.2fms [%.2fs]\n", (nTime6 - nTime5) * 0.001, nTimePostConnect * 0.000001);

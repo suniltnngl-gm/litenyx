@@ -219,7 +219,34 @@ Required before INT-OPEN-1 is classified `RESOLVED / VERIFIED`:
 
 These need a built `dogecoind` (production-build target) and the regtest harness;
 out of scope for the standalone KAT. INT-Q5 (pin the Makefile clone to v1.14.9)
-should land first so the daemon built is the structurally-verified one.
+landed first (commit 5586b07) so the daemon built is the structurally-verified one.
+
+### 4.3 Daemon integration scaffolding — AUTHORED, NOT YET EXECUTED
+
+G1 fault-injection mechanism, the arming RPC, and the G1–G3 harness are written
+and patch-verified, but NOT run in this environment (no daemon build possible
+here — see blocker below).
+
+- **G1 hook:** `ConnectTip` tail (post-`FlushStateToDisk`, post-`UpdateTip`, before
+  `PublishActive`) consults a debug-only `std::atomic<bool> g_litenyxForceFlushFail`
+  (file-local in `src/validation.cpp`, gated `#ifndef NDEBUG`). When armed it
+  `return false` WITHOUT publishing — exactly the INT-Q4 window. Symbol armed via
+  `LitenyxArmForceFlushFail(bool)`.
+- **Arming RPC:** `testlitenyxforceflushfail "arm"` in `src/rpc/mining.cpp`
+  (registered in `commands[]`; harness skips if absent → signals non-debug build).
+- **Harness:** `tests/regtest/test_litenyx_m3_integration.py` — `test_g1_*` (forced
+  failure ⇒ SSS unchanged), `test_g2_*` (success ⇒ staged delta visible once),
+  `test_g3_*` (connect then disconnect/revert ⇒ SSS restored; reconnect converges).
+  Mirrors the Phase-1/2 scaffold's mandatory binary gate; collection cleanly gates
+  on a present debug daemon.
+
+**Environment blocker (this local MSYS2/UCRT64 install):** no `make`/`autoconf`/
+`libtool`, no `pacman`, and no BerkeleyDB/libevent/OpenSSL dev headers — a
+`production-build` of `dogecoind` cannot be produced here. Therefore G1–G3 are
+AUTHORED and READY-TO-RUN on CI (which builds the pinned debug daemon) but are
+**not yet executed**. The classification INT-OPEN-1 remains
+`IMPLEMENTATION-DONE / KAT-VERIFIED` and must NOT advance to `RESOLVED / VERIFIED`
+until G1–G3 pass against the built daemon.
 
 All P4/P5/P6-scoped: the fix is orthogonal to topology/lifecycle/execution hooks and
 must not perturb their ConnectBlock ordering
