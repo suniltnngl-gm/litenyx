@@ -928,3 +928,157 @@ G-DA-1..4 recorded. No frozen invariant reopened; emitter/provenance remains
 deferred as agreed. This completes the frozen dependency stack
 (Components 1-6). Next: outward into the broader ecosystem, beginning with
 Component 7 (Routing / XCT).
+
+# Component 7 — Routing / XCT
+
+**Nature of this component (read first).** This is the first step OUTWARD from the
+frozen consensus-authority stack. Unlike Components 1-6, the subject here is
+largely NOT implemented: the frozen stack is consensus-AUTHORITY, not TRANSPORT.
+The critique is therefore architectural — it classifies what exists versus what is
+design-space, and frames the required authority contract for a hypothetical future
+consumer WITHOUT presenting any proposed mechanism as a mature Litenyx principle.
+
+**Central question:** For an execution the frozen stack has already permitted
+(`effMayRoute = true`), what canonical transition contract must a future
+Routing/XCT consumer satisfy so that acting on that permission cannot escalate
+authority, survive retirement, bypass the cross-chain spend invariant, or create
+value the protocol forbids?
+
+**Verdict — three-part:**
+
+```
+Routing Capability: IMPLEMENTED  |  Routing/XCT Transition: ABSENT  |  Future Authority Contract: XCT-OPEN-1
+```
+
+The maturity distinction is the whole point of this component:
+
+```
+MayRoute = Capability Predicate  ≠  Routing/XCT Transition Authority
+```
+
+`mayRoute`/`effMayRoute` is a READ of authority (a pure boolean), surfaced
+read-only over RPC and consumed only as a block accept/reject gate. NO code
+anywhere effects a route. DRAINING preserving `effMayRoute` establishes what an
+eventual settle consumer MAY do; it does NOT prove such a consumer exists.
+
+## Deliverable 1 — Surface classification (reconnaissance; unchanged)
+
+```
+IMPLEMENTED  |  PARTIAL/SCAFFOLD  |  SPEC-ONLY  |  ABSENT
+```
+
+| Surface | Class | Anchor |
+| --- | --- | --- |
+| `mayRoute` capability predicate (Phase-6) | IMPLEMENTED | `LITENYX_execution_authority.h:95,188` (`AUTHORIZED && exact-lane`, pure fold) |
+| `effMayRoute` monotone passthrough (Phase-7) | IMPLEMENTED | `LITENYX_draining_authority.h:239` (`effMayRoute = p6.mayRoute`, never altered) |
+| Read-only route inspection RPC | IMPLEMENTED (regtest, non-consensus) | `deploy/patches/litenyx-rpc.patch:415,488,513` ("creates NO process-local state, NOT a consensus dependency") |
+| Route-capability enforcement (as a gate, not transport) | IMPLEMENTED | `LITENYX_validation.cpp:300-334` (consumes decision to accept/reject a block; performs no routing action) |
+| Routing/XCT transition authority (actual cross-lane/cross-chain transfer mechanism) | ABSENT | no source file; `XCT` appears only as an explicit out-of-scope exclusion (`execution_authority_spec §100-101`, `draining_authority_spec:126`, `chainid_lifecycle_spec:700`) |
+| Cross-chain receipts / execution-lane routing payloads | SPEC-ONLY (FUTURE) | `topology_authority_spec_v0.1.md:88,664,687` ("(FUTURE) receipt routing / execution lanes") |
+| Persistent shared spent-set as cross-chain settle substrate | PARTIAL/SCAFFOLD | `test_litenyx.cpp:74` (invariant proven) but persistence unproven — the pre-existing SSC-OPEN-1 |
+
+## Deliverable 2 — Maturity guardrail confirmed from source
+
+Confirmed directly: `mayRoute` is (1) computed as a pure boolean, (2) surfaced
+read-only over RPC, (3) consumed only as an accept/reject block gate. There is no
+transition. The Phase-7 settle-only reading is exact: `effMayRoute = p6.mayRoute`
+defines what a future consumer MAY do and proves NO such consumer is implemented.
+
+## XCT-OPEN-1 (future transition authority contract)
+
+> What canonical transition contract must a future Routing/XCT consumer satisfy so
+> that an execution permitted by `effMayRoute = true`
+> (a) routes only through the authoritative `PersistentChainId` and lane
+>     established by Phase 5/6,
+> (b) cannot create or mutate lifecycle bindings,
+> (c) cannot remain valid across retirement or acquire authority through lane
+>     reuse,
+> (d) cannot bypass the canonical cross-chain spend invariant, and
+> (e) cannot create, duplicate, or implicitly bridge value contrary to the
+>     protocol's issuance/burn invariants?
+
+**Five clean authority boundaries a real XCT layer MUST NOT cross:**
+
+```
+XCT  ⇏  BindingMutation
+XCT  ⇏  LifecycleMutation
+XCT  ⇏  TopologyMutation
+XCT  ⇏  IdentityReuse / ABA
+XCT  ⇏  UnauthorizedValueCreation
+```
+
+These are the outward projection of the same negative-authority discipline proven
+inward for Phase 7 (Component 6 Surface A) — carried forward as REQUIREMENTS on a
+not-yet-designed layer, not as proven properties.
+
+## Dependencies
+
+### XCT-DEP-1 — SSC-OPEN-1
+Any XCT design relying on the global shared-spend invariant (boundary (d)) must
+resolve or explicitly inherit its deterministic reconstruction contract. The
+cross-chain double-spend exclusion is proven behaviourally (`test_litenyx.cpp:74`)
+but its persistence/reconstruction remains OPEN as SSC-OPEN-1 (Component 1).
+
+### XCT-DEP-2 — Effective Authority (consume, never reconstruct)
+The transition MUST consume the effective authority available at its execution
+point and MUST NEVER independently reconstruct a weaker routing permission:
+
+```
+P5 → P6 → P7 (if applicable) → effMayRoute
+```
+
+A consumer that re-derives its own routing permission (rather than consuming the
+frozen result) reopens every escalation surface Components 4-6 closed.
+
+### DA-OPEN-1 — conditional upstream dependency (NOT an XCT blocker)
+A future XCT consumer depends on Phase-7 effective capability ONLY WHEN a valid
+drain commitment exists. The unresolved mechanism that causes an identity to
+ENTER draining (DA-OPEN-1, Component 6) is therefore a CONDITIONAL upstream
+dependency, not a precondition of core XCT transition semantics:
+
+> Resolution of autonomous drain-entry provenance (DA-OPEN-1) is required before
+> DRAINING can become fully enforced in production, but XCT transition semantics
+> MAY be specified independently against a supplied, canonically-valid
+> effective-authority result. XCT correctness MUST NOT be coupled to the
+> intentionally-unresolved Phase-7 provenance problem.
+
+## Value-conservation model — classified OPEN (not derived)
+
+The burn doctrine (`topology_spec_v0.1.md:203-205`, "split/merge touches only
+routing/N, never coin issuance"; `consensus_spec_v0.1.md:59` "chain confirmation
+is a routing property; spent-state is global") proves that TOPOLOGY MUTATION does
+not itself mint or burn value. It does NOT by itself fully specify a future XCT
+value-conservation / cross-chain settlement accounting rule. Deriving more than
+this from the frozen evidence would overreach.
+
+### XCT-OPEN-2 (value conservation)
+> What is the exact cross-chain settlement accounting rule under which an XCT
+> transition conserves value consistent with the issuance/burn model (burn-not-
+> bridge)? Recorded OPEN; boundary (e) states the PROHIBITION, not the mechanism.
+
+## Guardrails (doctrine-level; no code change; forward-looking)
+
+- **G-XCT-1** — `mayRoute`/`effMayRoute` are capability predicates. No layer may
+  treat their truth as a routing action having occurred (reinforces G-EA-1 /
+  G-DA-1).
+- **G-XCT-2** — Any XCT consumer MUST consume frozen effective authority
+  (XCT-DEP-2) and MUST NOT reconstruct a private/weaker routing permission.
+- **G-XCT-3** — An XCT transition MUST be keyed on `PersistentChainId` end-to-end;
+  lane-keying reopens the ABA hazard (inherits G-CL-3 / G-DA-3).
+- **G-XCT-4** — No XCT mechanism proposal may be presented as a mature Litenyx
+  principle until XCT-OPEN-1 (contract) and XCT-OPEN-2 (value conservation) are
+  answered spec-first.
+
+## Disposition
+
+Routing CAPABILITY is IMPLEMENTED and mature; Routing/XCT TRANSITION authority is
+ABSENT — the correct, expected result for a consensus-authority stack that is not
+(yet) a transport/settlement layer. The mature authority stack and the not-yet-
+designed transport layer are cleanly separated. Recorded: XCT-OPEN-1 (five
+boundaries), XCT-OPEN-2 (value conservation), dependencies XCT-DEP-1/2 and the
+CONDITIONAL DA-OPEN-1, guardrails G-XCT-1..4. No frozen invariant reopened; no
+proposed mechanism elevated to principle.
+
+Live OPEN design boundaries now carried forward: SSC-OPEN-1, DA-OPEN-1, XCT-OPEN-1,
+XCT-OPEN-2. Next: continue outward (e.g. RPC surface / mempool-ATMP boundary /
+daemon integration) as directed.
