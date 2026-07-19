@@ -1738,3 +1738,115 @@ reopened; P4/P5/P6 pure engines untouched.
 Live OPEN design boundaries now carried forward: SSC-OPEN-1 (== PR-OPEN-1),
 DA-OPEN-1, XCT-OPEN-1, XCT-OPEN-2, ATMP-OPEN-1, ATMP-OPEN-2, RPC-OPEN-1, RPC-OPEN-2,
 INT-OPEN-1. This completes the outward ecosystem traversal (Components 1-11).
+
+# Synthesis — Components 1-11
+
+Purpose: a dependency-aware ranking of the nine live OPEN boundaries, the
+convergence they reveal, and a resolution SEQUENCE. This section deliberately does
+NOT propose a concrete INT-OPEN-1 code fix; the correct atomicity/recovery
+solution follows from first defining the SharedSpendSet's canonical ownership
+model.
+
+## Maturity map (what is settled vs. open)
+
+- **Frozen / proven (do not reopen):** P4 Topology Authority, P5 ChainId
+  Lifecycle, P6 Execution Authority (pure engines + KATs); P7 pure Draining
+  overlay (`770496e`). Composition ordering, reorg symmetry for connected blocks,
+  fail-closed reconstruction, single unbypassed enforcement path (Component 11
+  Surfaces 1/2/3/5/6).
+- **Open (nine boundaries):** ranked below.
+
+## Priority ranking (dependency-aware)
+
+| Rank | OPEN item | Class | Severity rationale |
+| --- | --- | --- | --- |
+| 1 | **INT-OPEN-1** | Existing composition defect | A rejected candidate block mutates the live `SharedSpendSet`, perturbing subsequent LOCAL `ConnectBlock` decisions. Real today (regtest/test regime; main DISABLED), not hypothetical. |
+| 2 | **RPC-OPEN-1** | Existing access-control defect | Ungated RPC mutation reaches the SAME consensus-relevant singleton. Independent second corruption path into one vulnerable object. |
+| 3 | **SSC-OPEN-1 / PR-OPEN-1** | Architectural (foundational) | Defines how that same `SharedSpendSet` obtains canonical recovery/convergence across restart/reindex/crash/reorg. |
+| 4 | **DA-OPEN-1** | Required before P7 production | Blocks Phase-7 production progression; NOT an existing P4-P6 integrity defect. |
+| 5 | **XCT-OPEN-1 / XCT-OPEN-2** | Required before Routing/XCT exists | Contract + value-conservation for a not-yet-designed transport layer. |
+| 6 | **ATMP-OPEN-1 / ATMP-OPEN-2** | Operational policy | Early-rejection/DoS optimization; best after tx/XCT semantics are concrete. |
+| 7 | **RPC-OPEN-2** | Presentation / operator-safety | Advisory-vs-canonical labelling; important, lower consensus risk. |
+
+## The central convergence
+
+```
+INT-OPEN-1  +  RPC-OPEN-1  +  SSC-OPEN-1 / PR-OPEN-1   ->   SharedSpendSet canonical-state problem
+```
+
+The three highest-ranked items are NOT independent bugs. They are three
+manifestations of ONE Phase-2 maturity boundary — the SharedSpendSet's undefined
+canonical ownership model:
+
+- **INT-OPEN-1 = transactional atomicity** (mutation commits before later rejection
+  with no rollback on the failed-connect path).
+- **RPC-OPEN-1 = mutation access control** (an ungated external path writes the same
+  singleton).
+- **SSC-OPEN-1 / PR-OPEN-1 = recovery convergence** (cold-start reconstruction to
+  canonical history is unproven).
+
+Solving any one in isolation risks patching a symptom. The ownership model must be
+fixed FIRST, because it determines the correct atomicity boundary AND the correct
+recovery contract AND where mutation authority may legitimately live.
+
+## The prerequisite decision (before any fix)
+
+```
+Is SharedSpendSet fundamentally:
+  (i)   a transactional DERIVED FOLD of canonical multi-chain spend history, OR
+  (ii)  PERSISTENT CANONICAL STATE with its own flush/rollback discipline, OR
+  (iii) another formally-defined model?
+```
+
+This choice is doctrine, not code:
+- If **(i) derived fold** — atomicity means the fold's commit is scoped to
+  successful block connection (INT-OPEN-1 becomes "commit last / scoped rollback");
+  recovery is deterministic replay (PR-OPEN-1); RPC mutation is illegitimate by
+  definition (RPC-OPEN-1 closes hard).
+- If **(ii) persistent canonical state** — atomicity means a reorg-consistent
+  batch tied to the CoinsView flush; recovery is persisted + verified; RPC mutation
+  is a maintenance operation that still must be gated.
+- The two models yield DIFFERENT correct solutions to the SAME three OPEN items,
+  which is precisely why the model is decided first.
+
+## Resolution sequence
+
+```
+SharedSpendSet Canonical-State Doctrine  ->  INT-OPEN-1  ->  RPC-OPEN-1  ->  PR-OPEN-1
+```
+
+then, independently:
+
+```
+DA-OPEN-1  ->  P7 provenance / production integration
+```
+
+then, later:
+
+```
+XCT-OPEN-1 / XCT-OPEN-2  ->  Routing / XCT  ->  ATMP-OPEN-1 / ATMP-OPEN-2
+```
+
+RPC-OPEN-2 (presentation) can be addressed at any time; it has no upstream
+dependency.
+
+## Cross-references (traceability)
+
+- **SharedSpendSet cluster:** Component 1 (F-SSC-1..5, SSC-OPEN-1), Component 9
+  (PR-OPEN-1, PR-NOGO-1..3, G-PR-1..3), Component 10 (F-RPC-1/2, RPC-OPEN-1,
+  RPC-NOGO-3, G-RPC-1/EXT-1), Component 11 (INT-OPEN-1, INT-NOGO-1..3, G-INT-1).
+- **Phase-7 cluster:** Component 6 (DA-OPEN-1, DA-NOGO-1..3, G-DA-1..4),
+  Component 9 (P7 recovery NOT YET DEFINED, G-PR-4), Component 11 (P7 not yet
+  integrated, G-INT-4).
+- **Transport cluster:** Component 7 (XCT-OPEN-1/2, XCT-DEP-1/2, G-XCT-1..4),
+  Component 8 (ATMP-OPEN-1/2, ATMP-NOGO-1..3, G-ATMP-1..4).
+
+## Disposition
+
+The audit converges on a single foundational decision: the SharedSpendSet
+canonical-state doctrine, which governs the three highest-priority OPEN items
+(INT-OPEN-1, RPC-OPEN-1, SSC/PR-OPEN-1). The Phase-7 and transport clusters are
+downstream and independently sequenced. No frozen invariant is reopened; P4/P5/P6
+pure engines remain correct. NEXT STEP is the doctrine decision (derived fold vs.
+persistent canonical state vs. other) — NOT a code fix — after which INT-OPEN-1's
+solution is determined rather than improvised.
