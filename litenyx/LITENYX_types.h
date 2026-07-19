@@ -37,10 +37,14 @@ static constexpr LitenyxChainParams LITENYX_CHAIN_PARAMS[LITENYX_MAX_CHAINS] = {
 //   0                     -> V0: non-Litenyx-aware legacy layout (no topology bytes)
 //   LITENYX_AUX_MAGIC_V1  -> Phase 2/3 Litenyx layout           (no topology bytes)
 //   LITENYX_AUX_MAGIC_V2  -> Phase 4 topology-capable layout     (+32B commitment)
-// V1 keeps its exact historical value; V2 is a distinct 4-byte tag. Layout is
-// keyed on this value so V0/V1 byte streams are preserved byte-for-byte.
+//   LITENYX_AUX_MAGIC_V3  -> Phase 5 lifecycle-capable layout     (+32B lifecycle)
+// V1 keeps its exact historical value; V2/V3 are distinct 4-byte tags. Layout is
+// keyed on this value so V0/V1/V2 byte streams are preserved byte-for-byte.
 static constexpr uint32_t LITENYX_AUX_MAGIC_V1 = 0x4C595858; // "LYXX"
 static constexpr uint32_t LITENYX_AUX_MAGIC_V2 = 0x4C595932; // "LYY2"
+// Phase 5 (spec §6.1): V3 = exact V2 88-byte prefix + trailing 32B lifecycle
+// commitment = 120 bytes. Purely additive; V1/V2 streams unchanged.
+static constexpr uint32_t LITENYX_AUX_MAGIC_V3 = 0x4C595933; // "LYY3"
 // Back-compat alias for existing call sites that predate V1/V2 versioning.
 static constexpr uint32_t LITENYX_AUX_MAGIC = LITENYX_AUX_MAGIC_V1;
 

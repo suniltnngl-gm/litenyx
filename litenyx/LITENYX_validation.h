@@ -60,4 +60,28 @@ bool LitenyxCheckTopologyCommitment(const CBlock& block,
                                     const Consensus::Params& consensus,
                                     CValidationState& state);
 
+// Phase 5: consensus-critical ChainId-lifecycle-commitment enforcement (spec
+// §6.2 / §9). Thin GLUE over the pure lifecycle engine, layered STRICTLY ABOVE
+// the frozen Phase-4 topology authority. It MUST be called AFTER
+// LitenyxCheckTopologyCommitment has already returned true (§6.2 ordering), so a
+// block can never route around a failed/absent topology commitment by omitting
+// the Phase-5 field. Given the block being connected at height
+// (pindexPrev->nHeight + 1), it:
+//   1. selects the frozen per-network Phase-5 activation and derives the regime;
+//   2. reconstructs the expected L_h from CANONICAL CHAIN HISTORY ALONE (the
+//      SAME reconstruction Phase 4 uses), folding G over the topology boundaries,
+//      never from a tracker/cache;
+//   3. calls the pure LitenyxVerifyLifecycleCommitment against block.nyx_aux;
+//   4. maps the verdict: Valid -> true; Invalid -> state.Invalid(...) + false
+//      (fail-closed); AdvisoryMismatch -> true (soft regime, reportable).
+//
+// MUST be called OUTSIDE any try/catch (consensus-critical). PreDerivation /
+// disabled networks preserve legacy behavior. Re-derivation from the canonical
+// prefix means DisconnectBlock needs NO lifecycle undo (spec §7).
+bool LitenyxCheckLifecycleCommitment(const CBlock& block,
+                                     const CBlockIndex* pindexPrev,
+                                     const std::string& netId,
+                                     const Consensus::Params& consensus,
+                                     CValidationState& state);
+
 #endif // LITENYX_VALIDATION_H

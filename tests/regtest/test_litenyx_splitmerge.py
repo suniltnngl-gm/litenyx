@@ -583,3 +583,100 @@ def test_phase4_cache_deletion_cannot_change_acceptance(regtest_node):
                   _auth(regtest_node, "expected", "regtest", "300")["commitment"])["verdict"]
     assert before == after == "valid", "tracker state leaked into authority decision"
 
+
+# ---------------------------------------------------------------------------
+# Phase 5: Consensus-authoritative ChainId-lifecycle commitment ENFORCEMENT
+# (spec docs/litenyx_chainid_lifecycle_spec_v0.1.md §6.2/§8/§9.1/§10.11)
+#
+# These drive the REAL compiled Phase-5 engine (LITENYX_chainid_lifecycle.h) via
+# the regtest-only testlitenyxlifecycle RPC. It calls the SAME functions the
+# ConnectBlock hook (LitenyxCheckLifecycleCommitment) uses:
+#   regime -> LitenyxCalculateExpectedLifecycleFromChain -> LitenyxVerify-
+#   LifecycleCommitment. A deliberately corrupted commitment rejected here is
+#   rejected on the real consensus path (satisfies §10.11 compiled-and-
+#   exercised). Expected L_h is derived from a CANONICAL synthetic chain ALONE.
+# regtest Phase-5 activation: H_cid_derive = 200, H_cid_enforce = 400.
+# ---------------------------------------------------------------------------
+
+def _life(regtest_node, *args):
+    return regtest_node("testlitenyxlifecycle", *args)
+
+
+def test_phase5_regime_boundaries_exact(regtest_node):
+    """Lifecycle regime is determined strictly by height at H_cid_derive/enforce."""
+    assert _life(regtest_node, "regime", "regtest", "199")["regime"] == "PreDerivation"
+    assert _life(regtest_node, "regime", "regtest", "200")["regime"] == "SoftAdvisory"
+    assert _life(regtest_node, "regime", "regtest", "399")["regime"] == "SoftAdvisory"
+    assert _life(regtest_node, "regime", "regtest", "400")["regime"] == "HardAuthority"
+    # Mainnet is DISABLED in Phase 5 -> dormant at all heights.
+    assert _life(regtest_node, "regime", "main", "1000000")["regime"] == "PreDerivation"
+
+
+def test_phase5_prederivation_rejects_premature_commitment(regtest_node):
+    """h < H_cid_derive: absent is valid; a present commitment is premature."""
+    exp = _life(regtest_node, "expected", "regtest", "199")["commitment"]
+    z = "00" * 32
+    assert _life(regtest_node, "decide", "regtest", "199", "0", z)["verdict"] == "valid"
+    assert _life(regtest_node, "decide", "regtest", "199", "1", exp)["verdict"] == "invalid"
+
+
+def test_phase5_softadvisory_never_rejects(regtest_node):
+    """H_cid_derive <= h < H_cid_enforce: absent OK, correct OK, mismatch advisory."""
+    exp = _life(regtest_node, "expected", "regtest", "200")["commitment"]
+    wrong = "ff" + exp[2:]
+    z = "00" * 32
+    assert _life(regtest_node, "decide", "regtest", "200", "0", z)["verdict"] == "valid"
+    assert _life(regtest_node, "decide", "regtest", "200", "1", exp)["verdict"] == "valid"
+    assert _life(regtest_node, "decide", "regtest", "200", "1", wrong)["verdict"] == "advisory_mismatch"
+    # H_cid_enforce - 1 is still soft: missing must NOT be fatal.
+    assert _life(regtest_node, "decide", "regtest", "399", "0", z)["verdict"] == "valid"
+
+
+def test_phase5_hardauthority_fails_closed(regtest_node):
+    """h >= H_cid_enforce: require V3 commitment present + exact match; else invalid.
+
+    This is the corrupted-commitment rejection the acceptance invariant demands:
+    a mutated lifecycle commitment is rejected by the SAME engine the daemon
+    ConnectBlock hook runs."""
+    exp = _life(regtest_node, "expected", "regtest", "400")["commitment"]
+    wrong = "ff" + exp[2:]
+    z = "00" * 32
+    assert _life(regtest_node, "decide", "regtest", "400", "0", z)["verdict"] == "invalid"      # absent
+    assert _life(regtest_node, "decide", "regtest", "400", "1", exp)["verdict"] == "valid"       # correct
+    assert _life(regtest_node, "decide", "regtest", "400", "1", wrong)["verdict"] == "invalid"   # corrupted
+    assert _life(regtest_node, "decide", "regtest", "400", "1", z)["verdict"] == "invalid"       # present-but-zero != absent
+
+
+def test_phase5_expected_lifecycle_path_independent(regtest_node):
+    """Expected L_h is a pure function of canonical history: deterministic across
+    repeated queries and heights (IBD == sequential at the derivation level)."""
+    for h in ("200", "300", "400", "500", "600"):
+        a = _life(regtest_node, "expected", "regtest", h)["commitment"]
+        b = _life(regtest_node, "expected", "regtest", h)["commitment"]
+        assert a == b, f"non-deterministic expected lifecycle commitment at {h}"
+        v = _life(regtest_node, "decide", "regtest", h, "1", a)["verdict"]
+        assert v == "valid", f"correct lifecycle commitment not accepted at {h}: {v}"
+
+
+def test_phase5_persistent_chainids_never_recycled(regtest_node):
+    """Core Phase-5 property (spec §0.1/§3): ChainIds are persistent and never
+    recycled. As the canonical chain grows across SPLIT boundaries, nextChainId
+    is monotonically non-decreasing (a retired ChainId is never re-issued)."""
+    prev_next = -1
+    for h in ("200", "300", "400", "500", "600"):
+        r = _life(regtest_node, "expected", "regtest", h)
+        assert r["nextChainId"] >= prev_next, (
+            f"nextChainId regressed at {h}: {r['nextChainId']} < {prev_next}")
+        prev_next = r["nextChainId"]
+
+
+def test_phase5_lifecycle_independent_of_topology_commitment(regtest_node):
+    """The two commitments are independent (spec §6.1): the lifecycle expected
+    commitment is NOT equal to the topology expected commitment at the same
+    height, proving they are distinct consensus authorities carried side by
+    side in V3, not the same value duplicated."""
+    for h in ("400", "500"):
+        topo = _auth(regtest_node, "expected", "regtest", h)["commitment"]
+        life = _life(regtest_node, "expected", "regtest", h)["commitment"]
+        assert topo != life, f"lifecycle and topology commitments collide at {h}"
+
