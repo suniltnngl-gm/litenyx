@@ -23,6 +23,8 @@ KERRNYX_V3_SRC = $(REPO_ROOT)/cpp_reference/test/test_litenyx_v3_carrier.cpp
 KERRNYX_V3_BIN = $(REPO_ROOT)/cpp_reference/test/test_litenyx_v3_carrier
 KERRNYX_EXEC_SRC = $(REPO_ROOT)/cpp_reference/test/test_litenyx_execution_authority.cpp
 KERRNYX_EXEC_BIN = $(REPO_ROOT)/cpp_reference/test/test_litenyx_execution_authority
+KERRNYX_DRAIN_SRC = $(REPO_ROOT)/cpp_reference/test/test_litenyx_draining_authority.cpp
+KERRNYX_DRAIN_BIN = $(REPO_ROOT)/cpp_reference/test/test_litenyx_draining_authority
 
 .PHONY: help cpp-test cpp-compile-check detect-env clone-dogecoin inject-hooks production-build regtest-test
 
@@ -56,6 +58,7 @@ inject-hooks: clone-dogecoin
 	@cp $(REPO_ROOT)/litenyx/LITENYX_topology_authority.h $(DOGECOIN_DIR)/src/litenyx/LITENYX_topology_authority.h
 	@cp $(REPO_ROOT)/litenyx/LITENYX_chainid_lifecycle.h $(DOGECOIN_DIR)/src/litenyx/LITENYX_chainid_lifecycle.h
 	@cp $(REPO_ROOT)/litenyx/LITENYX_execution_authority.h $(DOGECOIN_DIR)/src/litenyx/LITENYX_execution_authority.h
+	@cp $(REPO_ROOT)/litenyx/LITENYX_draining_authority.h $(DOGECOIN_DIR)/src/litenyx/LITENYX_draining_authority.h
 	@cp $(REPO_ROOT)/litenyx/LITENYX_topology_tracker.h $(DOGECOIN_DIR)/src/litenyx/LITENYX_topology_tracker.h
 	@cp $(REPO_ROOT)/litenyx/LITENYX_topology_tracker.cpp $(DOGECOIN_DIR)/src/litenyx/LITENYX_topology_tracker.cpp
 	@echo "Applying litenyx patches (mandatory: any failure is fatal)..."
@@ -117,6 +120,12 @@ cpp-test:
 		-lpthread $(BOOST_TEST) && \
 		echo "Running Litenyx execution authority unit test (Phase 6)..." && \
 		$(KERRNYX_EXEC_BIN)
+	@echo "Compiling Litenyx draining authority unit test (Phase 7)..."
+	$(CXX) -std=c++20 -O0 -DKERRNYX_STANDALONE_TEST \
+		$(KERRNYX_INCLUDES) $(KERRNYX_DRAIN_SRC) -o $(KERRNYX_DRAIN_BIN) \
+		-lpthread $(BOOST_TEST) && \
+		echo "Running Litenyx draining authority unit test (Phase 7)..." && \
+		$(KERRNYX_DRAIN_BIN)
 
 cpp-compile-check:
 	@echo "Litenyx consensus is header-only integer math; no float check required."
