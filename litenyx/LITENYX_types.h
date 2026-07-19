@@ -33,7 +33,16 @@ static constexpr LitenyxChainParams LITENYX_CHAIN_PARAMS[LITENYX_MAX_CHAINS] = {
 };
 
 // --- Aux extension identity ---------------------------------------------------
-static constexpr uint32_t LITENYX_AUX_MAGIC = 0x4C595858; // "LYXX"
+// Magic doubles as the AuxHeader WIRE-FORMAT VERSION (spec §5.7):
+//   0                     -> V0: non-Litenyx-aware legacy layout (no topology bytes)
+//   LITENYX_AUX_MAGIC_V1  -> Phase 2/3 Litenyx layout           (no topology bytes)
+//   LITENYX_AUX_MAGIC_V2  -> Phase 4 topology-capable layout     (+32B commitment)
+// V1 keeps its exact historical value; V2 is a distinct 4-byte tag. Layout is
+// keyed on this value so V0/V1 byte streams are preserved byte-for-byte.
+static constexpr uint32_t LITENYX_AUX_MAGIC_V1 = 0x4C595858; // "LYXX"
+static constexpr uint32_t LITENYX_AUX_MAGIC_V2 = 0x4C595932; // "LYY2"
+// Back-compat alias for existing call sites that predate V1/V2 versioning.
+static constexpr uint32_t LITENYX_AUX_MAGIC = LITENYX_AUX_MAGIC_V1;
 
 // Event bits (Phase 3). Reserved/unused in Phase 2.
 static constexpr int32_t LITENYX_SPLIT_EVENT_BIT = (1 << 29);

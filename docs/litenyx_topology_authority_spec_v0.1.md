@@ -410,44 +410,76 @@ the pruning-safe metadata is a Phase 4B(3)/pre-mainnet requirement, tracked in
 
 ---
 
-### 5.7 Topology commitment carrier & preimage (FROZEN — Phase 4B(3))
+### 5.7 Topology commitment carrier & verification (FROZEN — Phase 4B(3))
 
 The commitment binds a block to the topology the network independently derives.
 The AuxHeader **carries** the commitment; it NEVER **defines** authoritative
-topology (nodes derive `T_h` from canonical history per §5.6).
+topology (nodes derive `T_h` from canonical history per §5.6). The carried value
+is NEVER an input to derivation.
 
-**Carrier (FROZEN).** A fixed `uint256` field
-`LitenyxAuxHeader.topologyCommitment`. A fixed field (not coinbase/TLV) means the
-only meaningful states are **absent** (`IsNull()`), **present**, and
-**match/mismatch** — there is no "malformed" or "duplicate" commitment.
-
-**Value (FROZEN).** The field carries `TopologyCommitmentHash(T_h)`, DISTINCT
-from and NOT replacing the KAT-frozen `TopologyStateHash` (§3):
+**Value (FROZEN).** The commitment IS the frozen `TopologyStateHash(T_h)` (§3).
+NO separate hash domain is introduced: the canonical 13-byte serialization,
+`nVersion` field, `SHA256d` definition, and genesis KAT already establish the
+consensus identity, so a second hash would only add surface immediately before
+enforcement.
 
 ```text
-DOMAIN            = "LITENYX/TOPO/v1\0"          (16 bytes, ASCII, FROZEN)
-preimage          = DOMAIN(16) || nVersion(LE32) || canonicalState(13)   // 33 bytes
-TopologyCommitmentHash(T) = SHA256d(preimage)                            // 32 bytes
+expectedState → CanonicalSerialize13 → SHA256d → TopologyStateHash
+aux.topologyCommitment == TopologyStateHash(expectedState)
 ```
-
-Domain separation + version binding guarantee no other Litenyx structure can
-serialize to a colliding commitment preimage, and a future authority version
-(`nVersion != 1`) produces disjoint commitments. `TopologyStateHash` stays plain
-`SHA256d(state13)` and its genesis KAT is unchanged.
 
 KAT (genesis state, `nVersion=1`):
 
 ```text
-TopologyStateHash(genesis)      = 71667e04205a7150268d09b82c13849ddd2d187cbf73f5d83b2aecea693bfc09
-TopologyCommitmentHash(genesis) = dc4f6a4a36b97949c49638a30804ee167106b2b64ae929d012a6506d213ebf09
+TopologyStateHash(genesis) = 71667e04205a7150268d09b82c13849ddd2d187cbf73f5d83b2aecea693bfc09
 ```
+
+**Carrier & wire framing (FROZEN).** `magic` in `LitenyxAuxHeader` doubles as the
+**wire-format version**; layout is keyed on it so V0/V1 byte streams are
+preserved **byte-for-byte** (there is no outer length delimiter around `nyx_aux`,
+which is serialized mid-stream in `CBlockHeader`, so mid-struct field insertion
+is forbidden):
+
+| magic | version | layout |
+|-------|---------|--------|
+| `0` | V0 (non-Litenyx-aware) | existing fields; **no** topology bytes |
+| `LITENYX_AUX_MAGIC_V1` (`"LYXX"`) | Phase 2/3 | existing fields; **no** topology bytes |
+| `LITENYX_AUX_MAGIC_V2` (`"LYY2"`) | Phase 4 | existing fields **+ 32-byte** `topologyCommitment` |
+
+Serialization reads `magic` first, then conditionally reads the trailing 32
+bytes ONLY when `magic == V2`:
+
+```text
+V1: [magic][chainId][eventHeight][auxAnchor][splitVector][reserved]            = 56 bytes
+V2: [magic][chainId][eventHeight][auxAnchor][splitVector][reserved][commit32]  = 88 bytes
+```
+
+Because `magic` is read first, the parser knows the exact byte-width of `nyx_aux`
+BEFORE decoding subsequent block fields — the boundary is unambiguous. Layout is
+NOT height-dependent: wire parsing answers *"is a commitment present?"*;
+activation (§8) answers *"is its presence/absence/value valid at this height?"*.
+
+**Presence is STRUCTURAL, not value-based.** `HasTopologyCommitment() := IsV2()`.
+A V2 header with an all-zero commitment is **present** (and simply mismatches
+unless zero is the expected hash). Absence == V0/V1 (no bytes on the wire). This
+eliminates the zero-sentinel ambiguity. Predicates:
+
+```text
+HasKnownMagic() := IsV1() || IsV2()   // recognized Litenyx format
+HasTopologyCommitment() := IsV2()     // structural presence
+```
+
+Existing `HasMagic()`/`SetMagic()` are retained as V1 aliases, with `HasMagic()`
+deliberately redefined to recognize ANY known format (V1 **or** V2) so a V2
+header is never misclassified as non-Litenyx by legacy call sites.
 
 **Verifier (FROZEN, PURE).** `LitenyxVerifyTopologyCommitment(regime, present,
 commitment, expected) → {Valid, Invalid, AdvisoryMismatch}`. No I/O, no globals.
-Outcome table (matches §8/§9):
+Separation of concerns: presence = wire format; value = 32 bytes; validity =
+regime + expected hash. Outcome table (matches §8/§9):
 
-| Regime | absent | present + match | present + mismatch |
-|--------|--------|-----------------|--------------------|
+| Regime | absent (V0/V1) | V2 + match | V2 + mismatch |
+|--------|----------------|------------|---------------|
 | Pre-derivation | Valid | Invalid (premature) | Invalid (premature) |
 | Soft / advisory | Valid | Valid | **AdvisoryMismatch** (warn, not invalid) |
 | Hard / authoritative | **Invalid** | Valid | **Invalid** |

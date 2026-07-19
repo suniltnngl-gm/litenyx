@@ -13,6 +13,10 @@
 //   A6 disconnect/reconnect: rederive after truncation == original prefix.
 //   A7 reorg: canonical prefix identical; both branches deterministic.
 //   A8 TopologyStateHash: canonical serialization, stable, sensitive to fields.
+//   C1 commitment value IS the frozen TopologyStateHash (no second hash domain).
+//   C2 VerifyTopologyCommitment regime matrix; zero-commitment != absence.
+//   C3 presence is STRUCTURAL (magic == V2), not zero-sentinel; predicates.
+//   C4 wire framing: V0/V1 byte-identical (56B), V2 +32B (88B), offset boundary.
 
 #include <litenyx/LITENYX_topology_authority.h>
 #include <litenyx/LITENYX_topology.h>
@@ -439,9 +443,8 @@ BOOST_AUTO_TEST_CASE(chain_reorg_prefix_identity)
     BOOST_CHECK(t1 == t2);
 }
 
-// C1: TopologyCommitmentHash — domain-separated, version-bound, KAT-pinned, and
-// DISTINCT from the (unchanged) TopologyStateHash.
-BOOST_AUTO_TEST_CASE(commitment_hash_domain_separated)
+// C1: Commitment value IS the frozen TopologyStateHash (NO second hash domain).
+BOOST_AUTO_TEST_CASE(commitment_is_frozen_state_hash)
 {
     LitenyxTopologyState g = LitenyxTopologyState::Genesis();
 
@@ -452,60 +455,146 @@ BOOST_AUTO_TEST_CASE(commitment_hash_domain_separated)
         HexOf(sh),
         "71667e04205a7150268d09b82c13849ddd2d187cbf73f5d83b2aecea693bfc09");
 
-    // Commitment hash KAT (domain || version || state). Pins the preimage bytes.
-    uint256 c = LitenyxTopologyCommitmentHash(g);
+    // The commitment carried in the AuxHeader EQUALS TopologyStateHash exactly.
+    uint256 c = LitenyxExpectedTopologyCommitment(g);
     BOOST_CHECK_EQUAL(
         HexOf(c.data),
-        "dc4f6a4a36b97949c49638a30804ee167106b2b64ae929d012a6506d213ebf09");
-
-    // Domain separation: commitment MUST differ from the plain state hash.
-    BOOST_CHECK_NE(HexOf(c.data), HexOf(sh));
+        "71667e04205a7150268d09b82c13849ddd2d187cbf73f5d83b2aecea693bfc09");
+    BOOST_CHECK_EQUAL(HexOf(c.data), HexOf(sh));
 
     // Field-sensitive: changing state changes the commitment.
     LitenyxTopologyState a = g; a.nN = (uint8_t)(g.nN + 1);
-    BOOST_CHECK_NE(HexOf(LitenyxTopologyCommitmentHash(a).data), HexOf(c.data));
+    BOOST_CHECK_NE(HexOf(LitenyxExpectedTopologyCommitment(a).data), HexOf(c.data));
 }
 
-// C2: VerifyTopologyCommitment — frozen outcome table (fixed-field semantics).
+// C2: VerifyTopologyCommitment — frozen outcome table (structural presence).
 BOOST_AUTO_TEST_CASE(verify_commitment_outcomes)
 {
     using R = LitenyxTopoRegime;
     using V = LitenyxCommitVerdict;
     LitenyxTopologyState exp = LitenyxTopologyState::Genesis();
-    uint256 correct = LitenyxTopologyCommitmentHash(exp);
+    uint256 correct = LitenyxExpectedTopologyCommitment(exp);
     uint256 wrong = correct; wrong.data[0] ^= 0xFF;
-    uint256 nul; nul.SetNull();
-    BOOST_CHECK(nul.IsNull());
-    BOOST_CHECK(!correct.IsNull());
+    uint256 zero; zero.SetNull(); // a PRESENT-but-zero V2 commitment
 
     // PreDerivation: absent OK; present is premature -> Invalid.
-    BOOST_CHECK(LitenyxVerifyTopologyCommitment(R::PreDerivation, false, nul, exp) == V::Valid);
+    BOOST_CHECK(LitenyxVerifyTopologyCommitment(R::PreDerivation, false, correct, exp) == V::Valid);
     BOOST_CHECK(LitenyxVerifyTopologyCommitment(R::PreDerivation, true, correct, exp) == V::Invalid);
 
     // SoftAdvisory: absent OK; correct OK; mismatch -> advisory (NOT invalid).
-    BOOST_CHECK(LitenyxVerifyTopologyCommitment(R::SoftAdvisory, false, nul, exp) == V::Valid);
+    BOOST_CHECK(LitenyxVerifyTopologyCommitment(R::SoftAdvisory, false, correct, exp) == V::Valid);
     BOOST_CHECK(LitenyxVerifyTopologyCommitment(R::SoftAdvisory, true, correct, exp) == V::Valid);
     BOOST_CHECK(LitenyxVerifyTopologyCommitment(R::SoftAdvisory, true, wrong, exp) == V::AdvisoryMismatch);
 
     // HardAuthority: absent -> Invalid; mismatch -> Invalid; correct -> Valid.
-    BOOST_CHECK(LitenyxVerifyTopologyCommitment(R::HardAuthority, false, nul, exp) == V::Invalid);
+    BOOST_CHECK(LitenyxVerifyTopologyCommitment(R::HardAuthority, false, correct, exp) == V::Invalid);
     BOOST_CHECK(LitenyxVerifyTopologyCommitment(R::HardAuthority, true, wrong, exp) == V::Invalid);
     BOOST_CHECK(LitenyxVerifyTopologyCommitment(R::HardAuthority, true, correct, exp) == V::Valid);
+
+    // A PRESENT-but-zero commitment is present (not absent): in Hard it is a
+    // mismatch -> Invalid (genesis hash != 0), confirming zero != absence.
+    BOOST_CHECK(LitenyxVerifyTopologyCommitment(R::HardAuthority, true, zero, exp) == V::Invalid);
 }
 
-// C3: AuxHeader carries the commitment; HasTopologyCommitment reflects NULL.
-BOOST_AUTO_TEST_CASE(auxheader_carries_commitment)
+// C3: presence is STRUCTURAL (magic == V2), not inferred from a zero value.
+BOOST_AUTO_TEST_CASE(auxheader_presence_is_structural)
 {
     LitenyxAuxHeader h;
     h.SetNull();
-    BOOST_CHECK(!h.HasTopologyCommitment()); // NULL == absent
+    BOOST_CHECK(!h.HasKnownMagic());
+    BOOST_CHECK(!h.HasTopologyCommitment()); // V0
 
-    h.topologyCommitment = LitenyxTopologyCommitmentHash(LitenyxTopologyState::Genesis());
+    h.SetMagicV1();
+    BOOST_CHECK(h.IsV1());
+    BOOST_CHECK(h.HasKnownMagic());
+    BOOST_CHECK(h.HasMagic());              // deprecated alias recognizes V1
+    BOOST_CHECK(!h.HasTopologyCommitment()); // V1 carries no commitment
+
+    h.SetMagicV2();
+    BOOST_CHECK(h.IsV2());
+    BOOST_CHECK(h.HasKnownMagic());
+    BOOST_CHECK(h.HasMagic());              // deprecated alias must ALSO see V2
+    BOOST_CHECK(h.HasTopologyCommitment()); // structurally present
+
+    // Even with an all-zero commitment, a V2 header is PRESENT.
+    h.topologyCommitment = uint256();
     BOOST_CHECK(h.HasTopologyCommitment());
 
-    // The carrier round-trips the value unchanged (fixed uint256 field).
-    uint256 c = h.topologyCommitment;
-    BOOST_CHECK(c == LitenyxTopologyCommitmentHash(LitenyxTopologyState::Genesis()));
+    // Carrier round-trips the frozen hash unchanged.
+    h.topologyCommitment = LitenyxExpectedTopologyCommitment(LitenyxTopologyState::Genesis());
+    BOOST_CHECK(h.topologyCommitment ==
+                LitenyxExpectedTopologyCommitment(LitenyxTopologyState::Genesis()));
+}
+
+// C4: wire-format framing (spec §5.7). The standalone harness compiles out the
+// daemon serialize.h SerializationOp, so we mirror its EXACT field order + the
+// V2-conditional rule here to prove framing determinism:
+//   V0/V1 -> NO topology bytes (byte-identical to Phase 2/3)
+//   V2    -> +32 trailing commitment bytes; magic read first fixes the boundary.
+namespace {
+// Mirror of LitenyxAuxHeader::SerializationOp field order (little-endian ints).
+inline void PutU32(std::vector<unsigned char>& v, uint32_t x) {
+    v.push_back((unsigned char)(x & 0xFF));
+    v.push_back((unsigned char)((x >> 8) & 0xFF));
+    v.push_back((unsigned char)((x >> 16) & 0xFF));
+    v.push_back((unsigned char)((x >> 24) & 0xFF));
+}
+inline void PutU64(std::vector<unsigned char>& v, uint64_t x) {
+    for (int i = 0; i < 8; ++i) v.push_back((unsigned char)((x >> (8 * i)) & 0xFF));
+}
+inline void Put256(std::vector<unsigned char>& v, const uint256& u) {
+    for (int i = 0; i < 32; ++i) v.push_back(u.data[i]);
+}
+inline std::vector<unsigned char> ModelSerializeAux(const LitenyxAuxHeader& h) {
+    std::vector<unsigned char> v;
+    PutU32(v, h.magic);
+    PutU32(v, h.chainId);
+    PutU32(v, h.eventHeight);
+    Put256(v, h.auxAnchor);
+    PutU64(v, h.splitVector);
+    PutU32(v, h.reserved);
+    if (h.magic == LITENYX_AUX_MAGIC_V2) Put256(v, h.topologyCommitment); // V2-only
+    return v;
+}
+// Fixed prefix width shared by ALL versions: 4+4+4+32+8+4 = 56 bytes.
+const size_t kAuxPrefixLen = 56;
+} // namespace
+
+BOOST_AUTO_TEST_CASE(auxheader_wire_framing_versioned)
+{
+    // V1 (Phase 2/3 legacy) — exactly the prefix, NO topology bytes.
+    LitenyxAuxHeader v1; v1.SetNull(); v1.SetMagicV1(); v1.chainId = 1;
+    auto b1 = ModelSerializeAux(v1);
+    BOOST_CHECK_EQUAL(b1.size(), kAuxPrefixLen);
+
+    // V0 (non-Litenyx-aware, magic 0) — same width as V1, NO topology bytes.
+    LitenyxAuxHeader v0; v0.SetNull(); v0.chainId = 1;
+    auto b0 = ModelSerializeAux(v0);
+    BOOST_CHECK_EQUAL(b0.size(), kAuxPrefixLen);
+
+    // V0 and V1 differ ONLY in the leading magic word; the rest is byte-identical.
+    for (size_t i = 4; i < kAuxPrefixLen; ++i) BOOST_CHECK_EQUAL(b0[i], b1[i]);
+
+    // V2 (topology-capable) — prefix + 32 trailing commitment bytes.
+    LitenyxAuxHeader v2; v2.SetNull(); v2.SetMagicV2(); v2.chainId = 1;
+    v2.topologyCommitment =
+        LitenyxExpectedTopologyCommitment(LitenyxTopologyState::Genesis());
+    auto b2 = ModelSerializeAux(v2);
+    BOOST_CHECK_EQUAL(b2.size(), kAuxPrefixLen + 32);
+
+    // The shared prefix (after magic) is byte-identical across V1 and V2, so the
+    // legacy region is preserved; only the trailing 32 bytes are new.
+    for (size_t i = 4; i < kAuxPrefixLen; ++i) BOOST_CHECK_EQUAL(b1[i], b2[i]);
+
+    // Offset correctness: the next block field begins at 56 for V1, 88 for V2.
+    // The parser reads magic (bytes 0..3) first, so it knows which boundary
+    // applies BEFORE consuming any following field.
+    BOOST_CHECK_EQUAL(b1.size(), (size_t)56);
+    BOOST_CHECK_EQUAL(b2.size(), (size_t)88);
+
+    // The trailing 32 bytes of V2 are exactly the frozen commitment.
+    uint256 tail; for (int i = 0; i < 32; ++i) tail.data[i] = b2[kAuxPrefixLen + i];
+    BOOST_CHECK(tail == v2.topologyCommitment);
 }
 
 // A10: activation semantics (spec §8) — regimes, disabled sentinel, validity.
