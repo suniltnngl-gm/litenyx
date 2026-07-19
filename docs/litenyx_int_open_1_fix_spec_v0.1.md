@@ -61,28 +61,43 @@ Key facts for this lineage:
   `CCoinsViewCache view` (a stack-local layered over `pcoinsTip`) is DISCARDED
   without `Flush()`. UTXO changes vanish; the standalone SharedSpendSet singleton
   does NOT (the defect).
-- The UTXO delta becomes visible to the node state at `view.Flush()` INSIDE
-  `ConnectTip`, AFTER `ConnectBlock` succeeds — i.e. the true logical
-  connect-commit boundary for coins state is `ConnectTip`'s `view.Flush()`, not the
-  end of `ConnectBlock`.
-- Durability (crash boundary) is later still, at `FlushStateToDisk`.
+- The UTXO delta becomes visible to the coins state at `view.Flush()` INSIDE
+  `ConnectTip`, AFTER `ConnectBlock` succeeds.
+- **But `view.Flush()` is NOT the final failure-capable step of `ConnectTip`.** In
+  the Bitcoin/Dogecoin 1.14 lineage, after `view.Flush()` the tip is connected only
+  once the REMAINDER of `ConnectTip` completes successfully — notably
+  `FlushStateToDisk(state, FLUSH_STATE_IF_NEEDED)`, which can return false and cause
+  `ConnectTip` to return false (tip NOT connected). Therefore the canonical
+  connect-transition completion boundary is **successful return of `ConnectTip`**,
+  not specifically `view.Flush()`.
+- Durability (crash boundary) is later/again at `FlushStateToDisk` with a stronger
+  mode; crash-atomicity is a DIFFERENT concern from logical commit (see §4.6).
+
+> **Caveat (verification-deferred).** The vendored Dogecoin tree is not present in
+> this repo (patches + docs only). The lifecycle above is asserted from the known
+> 1.14 lineage; INT-Q3/INT-Q4 require confirming the exact post-`view.Flush()`
+> failure-capable steps against the vendored source at implementation time. The
+> spec deliberately binds M3 to the ABSTRACT "successful `ConnectTip` completion"
+> boundary so it stays correct regardless of which concrete step is last.
 
 ### 2.2 Consequence for the fix
 
 ```
-The canonical connect-commit boundary lies OUTSIDE (above) ConnectBlock.
+The canonical connect-transition COMPLETION boundary lies OUTSIDE (above)
+ConnectBlock, and is NOT necessarily view.Flush() — it is successful ConnectTip
+completion.
 ```
 
 Therefore **merely reordering `RecordSpend` to run after P6 inside `ConnectBlock`
 is INSUFFICIENT** to satisfy SS-INV-4: after P6 passes and `ConnectBlock` returns
-true, later steps in `ConnectTip` (or a `view.Flush()` failure, or a shutdown
-between `ConnectBlock` and flush) could still fail to make the block canonical,
-yet the reordered `RecordSpend` would already have mutated the singleton. Reorder
-closes today's specific leak but not the invariant.
+true, later steps in `ConnectTip` (e.g. `FlushStateToDisk` returning false, or a
+shutdown) could still fail to make the block canonical, yet the reordered
+`RecordSpend` would already have mutated the singleton. Reorder closes today's
+specific leak but not the invariant.
 
-The correct solution stages a delta across `ConnectBlock` and publishes it AT the
-same boundary the UTXO delta is published (`view.Flush()` in `ConnectTip`), so the
-SharedSpendSet delta and the coins delta share ONE commit boundary.
+The correct solution stages a delta across `ConnectBlock` and publishes it ONLY on
+the successful `ConnectTip` canonical-transition completion path — NOT bound
+specifically to `view.Flush()`, since failure-capable steps may follow it.
 
 ## 3. Mechanism comparison
 
@@ -105,42 +120,67 @@ SS-INV-5 (reorg symmetry), SS-INV-6 (recovery), crash-safety, complexity, and
   INT-NOGO-3.
 - Verdict: **rejected** (enumeration burden + NOGO-3 tension).
 
-### M3 — Candidate-state transaction: stage Δ, publish atomically at the canonical commit boundary
+### M3 — Candidate-state transaction: stage Δ, publish on successful canonical-transition completion
 - Stage `Δ_B` (the block's spends) in a scoped object during ConnectBlock; the
-  logical set is unchanged until the SAME boundary that flushes the coins view
-  publishes `Δ_B`. On any failure before that boundary, `Δ_B` is discarded (RAII /
+  logical set is unchanged until the successful `ConnectTip` completion path
+  publishes `Δ_B`. On any failure before that publication, `Δ_B` is discarded (RAII /
   scope exit), never applied.
-- SS-INV-4: **YES by construction** — visibility coincides with canonical commit;
-  no per-failure enumeration (discard is the default).
-- SS-INV-3: **YES** — Δ published iff the canonical transition commits.
-- SS-INV-5: symmetric — disconnect stages a reverse delta published at the
-  disconnect commit boundary (mirrors existing `LitenyxDisconnectSharedState`).
+- SS-INV-4: **YES by construction** — visibility coincides with canonical-transition
+  completion; no per-failure enumeration (discard is the default).
+- SS-INV-3: **YES** — Δ published iff the canonical transition completes.
+- SS-INV-5: symmetric — disconnect stages a reverse delta published on the
+  disconnect transition completion (mirrors existing `LitenyxDisconnectSharedState`).
 - SS-INV-6: compatible — recovery still re-derives the fold; staging is a runtime
   concern only.
-- Crash-safety: a crash before publish leaves `SSS_{h-1}`; a crash after publish
-  but before durable flush is handled by recovery (SS-INV-6) re-deriving from
-  canonical history — the in-memory publish is never treated as durable truth.
+- Crash-safety: LOGICAL commit-coincidence (M3's guarantee) is distinct from
+  CRASH-ATOMIC durability (deferred). A crash in the narrow window between
+  persistent chain advancement and in-memory SSS materialization is NOT closed by
+  M3; it is handled by recovery (SS-INV-6/7) re-deriving `Fold(canonical history)`.
+  The in-memory publish is never treated as durable truth. See §4.6.
 - Enumerate-every-path: **NO**. Complexity: MEDIUM (a staging object + one
-  publish/discard call at the coins-flush boundary).
+  publish/discard on the transition completion path).
 - Verdict: **recommended**.
 
 ### Preference note
 The user's initial candidate (stage -> validate -> commit) is exactly M3, PROVIDED
-"commit" is bound to the canonical coins-flush boundary in `ConnectTip`, not to the
-end of `ConnectBlock`. This spec adopts M3 with that boundary correction.
+"commit" is bound to the successful `ConnectTip` canonical-transition COMPLETION
+path — NOT to the end of `ConnectBlock`, and NOT specifically to `view.Flush()`
+(which is not the final failure-capable step, §2.1). This spec adopts M3 with that
+boundary correction.
 
 ## 4. Recommended design (spec-level, no code)
 
+### 4.0 Frozen M3 requirement (the load-bearing contract)
+
+```
+(R1) The SSS CandidateDelta remains INVISIBLE to every reader throughout ConnectBlock.
+(R2) It may be published ONLY as part of the successful ConnectTip
+     canonical-transition COMPLETION path.
+(R3) Any failure before that publication discards the CandidateDelta by DEFAULT.
+```
+
+These three are the frozen contract. The implementation hook point is subordinate to
+them: publication must occur on the transition-completion path, not at a specifically
+named intermediate step. Do NOT bind publication to `view.Flush()` — it is not the
+final failure-capable operation (§2.1).
+
 ### 4.1 Commit boundary
-Publish the SharedSpendSet delta at the SAME boundary the UTXO delta is published:
-`ConnectTip`'s `view.Flush()` (logical connect-commit). This makes coins-state and
-spend-set share one atomic visibility point.
+Publish the SharedSpendSet delta on the successful `ConnectTip` completion path
+(the logical canonical connect-transition boundary). This makes the SSS delta
+become visible only when the block actually becomes canonical.
 
 ```
 SSS_before -> Stage(Δ_B) during ConnectBlock -> [P4/P5/P6 + all ConnectBlock checks]
-   -> ConnectBlock true -> ConnectTip publishes coins view AND Δ_B together
-   -> any failure before publish: Δ_B discarded, SSS_after = SSS_before   [SS-INV-4]
+   -> ConnectBlock true -> ... remaining ConnectTip steps (incl. FlushStateToDisk) ...
+   -> ConnectTip completes successfully  => publish Δ_B
+   -> any failure before that completion: Δ_B discarded, SSS_after = SSS_before  [SS-INV-4]
 ```
+
+**Logical vs crash-atomic (explicit).** R1–R3 guarantee LOGICAL commit-coincidence
+during normal execution: no rejected/aborted transition leaves an SSS delta behind.
+They do NOT provide a single crash-atomic transaction spanning the persistent coins
+write and the in-memory SSS publish. That crash window is out of scope here and is
+governed by PR-OPEN-1 / SS-INV-6/7 (§4.6).
 
 ### 4.2 Staging object (logical shape only)
 - A per-connect scoped `Δ_B` = ordered list of `(outpoint, chainId)` to add,
@@ -151,23 +191,35 @@ SSS_before -> Stage(Δ_B) during ConnectBlock -> [P4/P5/P6 + all ConnectBlock ch
 - Ordering of `Δ_B` application follows SS-INV-2 (height, txindex, vinindex).
 
 ### 4.3 Publish / discard
-- **Publish:** at the connect-commit boundary, apply `Δ_B` to the live set in one
-  step. Idempotent and total (all entries pre-validated unspent).
+- **Publish:** on the successful `ConnectTip` completion path, apply `Δ_B` to the
+  live set in one step. Idempotent and total (all entries pre-validated unspent).
 - **Discard:** default on scope exit without publish (ConnectBlock false, or any
-  failure before the boundary). No enumeration of failure causes required.
+  failure before transition completion). No enumeration of failure causes required.
 
 ### 4.4 Disconnect symmetry (SS-INV-5)
-- Disconnect stages a reverse delta (`RevertSpend` set for the block) published at
-  the disconnect commit boundary, mirroring 4.3. Existing
+- Disconnect stages a reverse delta (`RevertSpend` set for the block) published on
+  the successful disconnect transition completion, mirroring 4.3. Existing
   `LitenyxDisconnectSharedState` semantics preserved; only the visibility point is
-  aligned to the coins boundary.
+  aligned to the transition-completion boundary.
 
-### 4.5 Crash interaction (SS-INV-6/7)
-- The in-memory publish is NEVER treated as durable truth. Durability +
-  cold-start convergence remain PR-OPEN-1's responsibility (verified checkpoint /
-  replay). This spec guarantees only: no non-canonical in-memory commit. A crash
-  at any point yields, after recovery, `Fold(canonical history)` — never a leaked
-  partial delta.
+### 4.5 Scope boundary of this fix (what M3 does and does NOT close)
+- **CLOSES:** INT-OPEN-1's rejected-connect contamination. During normal
+  execution, a rejected or aborted transition (P4/P5/P6 failure, ConnectBlock
+  false, or any `ConnectTip` step failing before completion) leaves
+  `SSS_after = SSS_before` bit-for-bit. This is the SS-INV-4 obligation, fully met.
+- **DOES NOT CLOSE:** crash-atomicity between persistent canonical-chain
+  advancement and in-memory SSS materialization. If the process crashes after the
+  chain has durably advanced but before/while the SSS publish is applied,
+  reconciliation is NOT M3's job.
+
+### 4.6 Crash interaction — deferred to PR-OPEN-1 (SS-INV-6/7)
+- The in-memory publish is NEVER treated as durable truth. The crash window in §4.5
+  is resolved on restart by recovery re-deriving `Fold(canonical history)` (verified
+  checkpoint + forward replay, or full replay), which by SS-INV-1 is the sole truth.
+- Thus M3 needs NO crash-atomic coupling to the coins write: correctness after a
+  crash is a recovery property, not a runtime-commit property. This cleanly
+  separates INT-OPEN-1 (logical commit-coincidence) from PR-OPEN-1 (crash/cold-start
+  convergence), matching the frozen synthesis ordering.
 
 ## 5. Interaction with the other frozen invariants (cross-check)
 
@@ -176,7 +228,7 @@ SSS_before -> Stage(Δ_B) during ConnectBlock -> [P4/P5/P6 + all ConnectBlock ch
 | SS-INV-1 (truth) | staging/publish are runtime representation only | preserved |
 | SS-INV-2 (ordering) | Δ_B applied in (height,txindex,vinindex) order | preserved |
 | SS-INV-3 (history-only) | Δ published iff canonical commit; RPC still cannot stage/publish | preserved / reinforced |
-| SS-INV-4 (atomicity) | visibility == canonical commit boundary | SATISFIED (the fix target) |
+| SS-INV-4 (atomicity) | visibility == successful ConnectTip completion | SATISFIED (logical; the fix target) |
 | SS-INV-5 (reorg) | symmetric reverse-delta at disconnect boundary | preserved |
 | SS-INV-6 (recovery) | staging is runtime; recovery re-derives fold | orthogonal, compatible |
 | SS-INV-7 (checkpoint) | unaffected (recovery-layer) | orthogonal |
@@ -189,31 +241,43 @@ SSS_before -> Stage(Δ_B) during ConnectBlock -> [P4/P5/P6 + all ConnectBlock ch
   checks run unchanged; only the mutation VISIBILITY moves. OK.
 - **INT-NOGO-3** (no try/catch on consensus-critical steps) — M3 uses scope-based
   discard, NOT try/catch around steps 2-5. OK.
-- **G-INT-1** — SharedSpendSet mutation is now published only at the canonical
-  commit boundary. Satisfied.
+- **G-INT-1** — SharedSpendSet mutation is now published only on the successful
+  canonical-transition completion path. Satisfied.
 
 ## 7. Open sub-questions deferred to implementation (not decided here)
 
-- **INT-Q1** — the precise code hook point for "publish at `view.Flush()`": whether
-  it is a call inside `ConnectTip` adjacent to the coins flush, or a registered
-  batch that the flush drives. (Implementation detail; both satisfy §4.1.)
+- **INT-Q1** — the precise code hook point for "publish on `ConnectTip` completion":
+  whether it is a call at the tail of the success path in `ConnectTip`, or a
+  registered batch the success path drives. (Implementation detail; both satisfy
+  §4.0 R1–R3.)
 - **INT-Q2** — whether staging should reuse the existing free-function API or a new
   scoped type. (Ergonomics; must not create a second reader path — RPC-NOGO/G-INT-3.)
 - **INT-Q3** — reindex/IBD path: confirm the same stage/publish boundary applies
   when many blocks connect in sequence (expected: yes, one publish per connected
-  block at its own boundary). To be verified against the vendored tree at
-  implementation time.
+  block at its own completion). To be verified against the vendored tree.
+- **INT-Q4 (load-bearing verification)** — confirm against the VENDORED Dogecoin
+  tree the exact ordered list of failure-capable steps in `ConnectTip` AFTER
+  `view.Flush()` (expected at least `FlushStateToDisk`), so the publish hook is
+  bound to the true LAST failure-capable step's success. If any failure-capable
+  step exists after the assumed one, the publish point moves accordingly — R1–R3
+  remain the invariant regardless.
 
 ## 8. Disposition
 
 INT-OPEN-1's fix is specified as **M3 — candidate-state transaction: stage the
-spend delta during `ConnectBlock`, publish it atomically at `ConnectTip`'s
-canonical coins-commit boundary, discard-by-default on any earlier failure.** This
-satisfies SS-INV-4 by construction WITHOUT enumerating failure paths and WITHOUT
-try/catch on consensus-critical steps, aligns SharedSpendSet visibility with the
-UTXO commit, and leaves durability/recovery to PR-OPEN-1. The key correction over
-the naive reorder (M1) is that the canonical commit boundary lies ABOVE
-`ConnectBlock`, so the fix stages ACROSS `ConnectBlock` and commits at
-`ConnectTip`. No Phase-2 code written; no invariant reopened. Next in sequence
-(after this spec is accepted): RPC-OPEN-1 design against SS-INV-3, then PR-OPEN-1
-against SS-INV-6/7.
+spend delta during `ConnectBlock`, keep it invisible throughout, and publish it
+ONLY on the successful `ConnectTip` canonical-transition completion path,
+discard-by-default on any earlier failure (frozen as §4.0 R1–R3).** This satisfies
+SS-INV-4's LOGICAL commit-coincidence by construction — WITHOUT enumerating failure
+paths and WITHOUT try/catch on consensus-critical steps. Two corrections over the
+prior draft are load-bearing: (1) the canonical-transition completion boundary lies
+ABOVE `ConnectBlock` and is NOT specifically `view.Flush()` (failure-capable steps
+follow it), so publication binds to successful `ConnectTip` completion; (2) LOGICAL
+commit-coincidence (this fix) is explicitly separated from CRASH-ATOMIC durability
+(PR-OPEN-1 / SS-INV-6/7). M3 closes rejected-connect contamination; the crash
+window between durable chain advancement and in-memory SSS materialization is closed
+by recovery re-deriving the canonical fold, not by this fix. The last
+failure-capable step in `ConnectTip` must be verified against the vendored tree
+(INT-Q4). No Phase-2 code written; no invariant reopened. Next in sequence (after
+this spec is accepted): RPC-OPEN-1 design against SS-INV-3, then PR-OPEN-1 against
+SS-INV-6/7.
