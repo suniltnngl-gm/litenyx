@@ -19,6 +19,8 @@ KERRNYX_AUTH_SRC = $(REPO_ROOT)/cpp_reference/test/test_litenyx_topology_authori
 KERRNYX_AUTH_BIN = $(REPO_ROOT)/cpp_reference/test/test_litenyx_topology_authority
 KERRNYX_CID_SRC = $(REPO_ROOT)/cpp_reference/test/test_litenyx_chainid_lifecycle.cpp
 KERRNYX_CID_BIN = $(REPO_ROOT)/cpp_reference/test/test_litenyx_chainid_lifecycle
+KERRNYX_V3_SRC = $(REPO_ROOT)/cpp_reference/test/test_litenyx_v3_carrier.cpp
+KERRNYX_V3_BIN = $(REPO_ROOT)/cpp_reference/test/test_litenyx_v3_carrier
 
 .PHONY: help cpp-test cpp-compile-check detect-env clone-dogecoin inject-hooks production-build regtest-test
 
@@ -100,6 +102,12 @@ cpp-test:
 		-lpthread $(BOOST_TEST) && \
 		echo "Running Litenyx ChainId lifecycle unit test (Phase 5)..." && \
 		$(KERRNYX_CID_BIN)
+	@echo "Compiling Litenyx V3 carrier unit test (Phase 5)..."
+	$(CXX) -std=c++20 -O0 -DKERRNYX_STANDALONE_TEST \
+		$(KERRNYX_INCLUDES) $(KERRNYX_V3_SRC) -o $(KERRNYX_V3_BIN) \
+		-lpthread $(BOOST_TEST) && \
+		echo "Running Litenyx V3 carrier unit test (Phase 5)..." && \
+		$(KERRNYX_V3_BIN)
 
 cpp-compile-check:
 	@echo "Litenyx consensus is header-only integer math; no float check required."
