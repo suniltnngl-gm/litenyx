@@ -1,5 +1,5 @@
 diff --git a/src/rpc/mining.cpp b/src/rpc/mining.cpp
-index 9e231baaf..c7f5d1244 100644
+index 9e231baaf..6e6deceb8 100644
 --- a/src/rpc/mining.cpp
 +++ b/src/rpc/mining.cpp
 @@ -18,6 +18,12 @@
@@ -15,7 +15,7 @@ index 9e231baaf..c7f5d1244 100644
  #include "txmempool.h"
  #include "util.h"
  #include "utilstrencodings.h"
-@@ -30,6 +36,15 @@
+@@ -30,6 +36,17 @@
  
  #include <univalue.h>
  
@@ -26,12 +26,14 @@ index 9e231baaf..c7f5d1244 100644
 +UniValue testlitenyxtopoauthority(const JSONRPCRequest& request);
 +UniValue testlitenyxlifecycle(const JSONRPCRequest& request);
 +UniValue testlitenyxexecauthority(const JSONRPCRequest& request);
++#ifndef NDEBUG
 +UniValue testlitenyxforceflushfail(const JSONRPCRequest& request);
++#endif
 +
  using namespace std;
  
  /**
-@@ -1366,8 +1381,516 @@ static const CRPCCommand commands[] =
+@@ -1366,8 +1383,521 @@ static const CRPCCommand commands[] =
      { "util",               "estimatepriority",       &estimatepriority,       true,  {"nblocks"} },
      { "util",               "estimatesmartfee",       &estimatesmartfee,       true,  {"nblocks"} },
      { "util",               "estimatesmartpriority",  &estimatesmartpriority,  true,  {"nblocks"} },
@@ -41,7 +43,9 @@ index 9e231baaf..c7f5d1244 100644
 +    { "litenyx",            "testlitenyxtopoauthority",&testlitenyxtopoauthority,true,  {"mode","net","height","arg4","arg5"} },
 +    { "litenyx",            "testlitenyxlifecycle",    &testlitenyxlifecycle,    true,  {"mode","net","height","arg4","arg5"} },
 +    { "litenyx",            "testlitenyxexecauthority",&testlitenyxexecauthority,true,  {"mode","net","height","arg4","arg5"} },
++#ifndef NDEBUG
 +    { "litenyx",            "testlitenyxforceflushfail",&testlitenyxforceflushfail,true,  {"arm"} },
++#endif
  };
  
 +/** Litenyx Phase 2 regtest-only RPC: exercise the REAL global shared spent-set
@@ -140,6 +144,7 @@ index 9e231baaf..c7f5d1244 100644
 +    }
 +}
 +
++#ifndef NDEBUG
 +UniValue testlitenyxforceflushfail(const JSONRPCRequest& request)
 +{
 +    // INT-OPEN-1 / M3 integration test hook (G1). Arms (or disarms) the forced
@@ -158,6 +163,8 @@ index 9e231baaf..c7f5d1244 100644
 +    out.pushKV("armed", arm);
 +    return out;
 +}
++
++#endif // NDEBUG
 +
 +/** Litenyx Phase 3 regtest-only RPC: exercise the REAL topology tracker (the
 + *  same module ConnectBlock/DisconnectBlock use) to prove the invariant

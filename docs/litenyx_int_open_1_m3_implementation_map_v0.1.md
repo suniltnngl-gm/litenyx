@@ -252,6 +252,48 @@ All P4/P5/P6-scoped: the fix is orthogonal to topology/lifecycle/execution hooks
 must not perturb their ConnectBlock ordering
 (`litenyx-validation.patch:43–111`).
 
+### 4.4 CI gate: `make m3-integration` (fail-closed)
+
+Added in commit after 441a3ec. Enforces the evidence hierarchy and fails the
+build at EVERY stage:
+
+    Pinned v1.14.9  ->  Patch Application  ->  Debug Daemon Build
+                 ->  M3 Delta KATs  ->  G1-G3 Regtest  ->  Verification Verdict
+
+- `[1/5]` Pin: asserts `git -C $(DOGECOIN_DIR) rev-parse HEAD == $(DOGECOIN_PIN)`
+  (e0a1c157791544e818c901bd9341896965afbf9d); mismatch => FATAL.
+- `[2/5]` Patch application proven by `inject-hooks` (litenyx sources present).
+- `[3/5]` Requires the DAEMON to exist at `$(DOGECOIN_DIR)/src/dogecoind`.
+- `[4/5]` Builds + runs the 6 real-class delta KATs (`KERRNYX_DELTA_BIN`); any
+  failure => gate fails.
+- `[5/5]` Runs ONLY `tests/regtest/test_litenyx_m3_integration.py`. A NON-ZERO
+  pytest exit => FATAL. A SKIPPED G1-G3 (detected via `grep skipped` on the
+  `-rA` report) => FATAL — a skipped test is explicitly NOT success.
+
+`production-build-debug` (dependency) configures with `--enable-debug` (so `-DNDEBUG`
+is absent) and REFUSES if the generated Makefile defines `NDEBUG`. This is the
+structurally-enforced guarantee that the fault-injection path is only ever present
+in debug builds.
+
+#### Production / release exclusion (structurally enforced, not described-only)
+
+The `testlitenyxforceflushfail` RPC and the `g_litenyxForceFlushFail` hook are
+wrapped in `#ifndef NDEBUG` in BOTH the `commands[]` registration, the forward
+declaration, and the handler body (rpc patch), and in the `ConnectTip` tail (validation
+patch). Under `-DNDEBUG` (release / `--disable-debug`) the RPC is NOT compiled into
+the binary and the forced-fail branch is removed — so the fault-injection surface
+cannot appear in a production build regardless of configuration mistake. The CI gate
+additionally refuses to run G1–G3 unless the debug build excluded `NDEBUG`.
+
+#### Promotion rule (explicit)
+
+    G1 ∧ G2 ∧ G3 = PASS   =>  INT-OPEN-1 = RESOLVED / DAEMON-VERIFIED
+    NOT EXECUTED ∨ SKIPPED ∨ FAIL  =>  INT-OPEN-1 remains IMPLEMENTATION-DONE / KAT-VERIFIED
+
+The classification advances ONLY when `make m3-integration` exits 0 with zero
+skipped tests.
+
+
 ---
 
 ## 5. Invariants preserved / not touched

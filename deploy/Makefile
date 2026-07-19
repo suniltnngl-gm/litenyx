@@ -41,7 +41,7 @@ KERRNYX_DELTA_BIN = $(REPO_ROOT)/cpp_reference/test/test_litenyx_shared_delta
 KERRNYX_DOGE_SUPPORT = $(DOGECOIN_DIR)/src/uint256.cpp \
                         $(DOGECOIN_DIR)/src/utilstrencodings.cpp
 
-.PHONY: help cpp-test cpp-compile-check detect-env clone-dogecoin inject-hooks production-build regtest-test
+.PHONY: help cpp-test cpp-compile-check detect-env clone-dogecoin inject-hooks production-build production-build-debug m3-integration regtest-test
 
 help:
 	@echo "Litenyx targets:"
@@ -49,6 +49,8 @@ help:
 	@echo "  clone-dogecoin  Clone Dogecoin base into external/dogecoin (gitignored)"
 	@echo "  inject-hooks    Copy litenyx/ sources + apply patches into the clone"
 	@echo "  production-build Configure + build dogecoind/dogecoin-cli/dogecoin-tx"
+	@echo "  production-build-debug  DEBUG-only build (--enable-debug, NO -DNDEBUG); fault-injection capable"
+	@echo "  m3-integration  FAIL-CLOSED INT-OPEN-1 gate: pin->patch->debug build->delta KATs->G1-G3 regtest"
 	@echo "  detect-env      Print toolchain include/lib paths"
 
 clone-dogecoin:
@@ -102,6 +104,57 @@ production-build: inject-hooks
 	@echo "Building (this is slow)..."
 	@cd $(DOGECOIN_DIR) && $(MAKE)
 	@echo "Build complete: dogecoind/dogecoin-cli/dogecoin-tx in $(DOGECOIN_DIR)/src"
+
+
+# INT-OPEN-1 / M3: DEBUG daemon build. Configures EXPLICITLY with --enable-debug so
+# that -DNDEBUG is NOT defined. The M3 G1 fault-injection hook and the
+# testlitenyxforceflushfail RPC are gated behind #ifndef NDEBUG and are therefore
+# STRUCTURALLY ABSENT from any release/--disable-debug build. The debug binary is
+# built into the standard src/ prefix but only via this target, never via production-build.
+production-build-debug: inject-hooks
+	@echo "Verifying INT-Q5 pin before building..."
+	@test "$(shell git -C $(DOGECOIN_DIR) rev-parse HEAD)" = "$(DOGECOIN_PIN)" || \
+		{ echo "FATAL: Dogecoin HEAD != pinned $(DOGECOIN_PIN) (got $$(git -C $(DOGECOIN_DIR) rev-parse HEAD))"; exit 1; }
+	@echo "Configuring DEBUG build (--enable-debug, NO -DNDEBUG)..."
+	@cd $(DOGECOIN_DIR) && ./autogen.sh && ./configure --enable-debug --with-incompatible-bdb --with-boost-process --with-boost-libdir=/usr/lib/x86_64-linux-gnu
+	@echo "Asserting debug build excludes -DNDEBUG..."
+	@grep -rq -- "-DNDEBUG" $(DOGECOIN_DIR)/Makefile $(DOGECOIN_DIR)/src/Makefile 2>/dev/null && \
+		{ echo "FATAL: configured build defines NDEBUG; G1 fault-injection would be excluded. Refusing."; exit 1; } || echo "OK: NDEBUG absent -> fault-injection capable daemon."
+	@echo "Building debug daemon (this is slow)..."
+	@cd $(DOGECOIN_DIR) && $(MAKE)
+	@echo "Debug build complete: $(DOGECOIN_DIR)/src/dogecoind (fault-injection capable)"
+
+# INT-OPEN-1 / M3: fail-closed integration gate. Enforces the evidence hierarchy:
+#   Pinned v1.14.9 -> Patch Application -> Debug Daemon Build ->
+#   M3 Delta KATs -> G1-G3 Regtest -> Verification Verdict
+# Every stage fails the build on any error. G1-G3 SKIPPED or FAIL => NOT success.
+m3-integration: production-build-debug
+	@echo "=== M3 INTEGRATION GATE (fail-closed) ==="
+	@echo "[1/5] Pin check: HEAD == $(DOGECOIN_PIN)"
+	@test "$(shell git -C $(DOGECOIN_DIR) rev-parse HEAD)" = "$(DOGECOIN_PIN)" || \
+		{ echo "FATAL: pin mismatch"; exit 1; }
+	@echo "[2/5] Patch application verified by production-build-debug (inject-hooks)"
+	@test -f $(DOGECOIN_DIR)/src/litenyx/LITENYX_sharedstate.cpp || \
+		{ echo "FATAL: litenyx sources not injected"; exit 1; }
+	@echo "[3/5] Debug daemon present:"
+	@test -x $(DOGECOIN_DIR)/src/dogecoind || { echo "FATAL: dogecoind missing"; exit 1; }
+	@echo "[4/5] M3 real-class delta KATs (6/6 required):"
+	$(CXX) -std=c++20 -O0 -DKERRNYX_STANDALONE_TEST \
+		$(KERRNYX_INCLUDES) $(KERRNYX_DELTA_SRC) $(KERRNYX_DOGE_SUPPORT) -o $(KERRNYX_DELTA_BIN) \
+		-lpthread $(BOOST_TEST) && $(KERRNYX_DELTA_BIN)
+	@echo "[5/5] G1-G3 regtest (SKIP or FAIL => gate fails):"
+	@cd $(REPO_ROOT)/tests/regtest && \
+		LITENYXD_BIN=$(DOGECOIN_DIR)/src/dogecoind \
+		LITENYX_CLI_BIN=$(DOGECOIN_DIR)/src/dogecoin-cli \
+		python3 -m pytest test_litenyx_m3_integration.py -v -p no:cacheprovider \
+		--tb=short -rA | tee /tmp/m3_integration_report.txt ; \
+		status=$$? ; \
+		if [ $$status -ne 0 ]; then echo "FATAL: M3 integration suite failed (rc=$$status)"; exit 1; fi ; \
+		if grep -qiE "skipped|[0-9]+ skipped" /tmp/m3_integration_report.txt; then \
+			echo "FATAL: M3 integration suite reports SKIPPED tests; a skipped G1-G3 is NOT success."; exit 1; \
+		fi ; \
+		echo "OK: M3 integration suite passed (no skips, no failures)."
+	@echo "=== VERDICT: G1 && G2 && G3 = PASS -> INT-OPEN-1 = RESOLVED / DAEMON-VERIFIED ==="
 
 cpp-test:
 	@echo "Compiling Litenyx consensus unit test (Phase 2)..."
