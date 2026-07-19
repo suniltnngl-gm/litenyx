@@ -264,3 +264,169 @@ boundary; none reopens a frozen invariant. Guardrails G-TOPO-1..3 recorded.
 Proceed to Component 3 (Topology Authority) — where the fold, the 13-byte
 `TopologyStateHash` serialization, and the commitment-verification regimes will
 be examined directly.
+
+---
+
+# Component 3 — Topology Authority
+
+**Central question:** Does Topology Authority uniquely bind every accepted block
+to the topology state derived from its canonical ancestry?
+
+Four surfaces examined: **(A) canonical state encoding/hash**, **(B)
+regime/activation semantics**, **(C) canonical reconstruction**, **(D)
+enforcement integration**.
+
+**Verdict:** This is one of the strongest boundaries in the stack. The pipeline
+
+```
+Canonical History -> Deterministic Fold -> Canonical TopologyState
+  -> 13-byte Commitment -> Regime Verification
+```
+
+holds end-to-end. The authoritative state is derived purely from canonical
+ancestor bodies; the block's asserted commitment is only ever *compared* against
+the independently-derived expected value, never fed back into derivation. All
+required invariants (below) hold against source. No frozen invariant is
+violated; the only items recorded are minor doctrine guardrails.
+
+## Source anchors
+
+- `litenyx/LITENYX_topology_authority.h:121-150` — `D_v1` / `M_c_v1` /
+  single-downscale (version-pinned math).
+- `:198-236` — `LitenyxTopologyState` value + explicit 13-byte LE serialization.
+- `:238-340` — self-contained SHA256d + `LitenyxTopologyStateHash` (KAT-locked).
+- `:383-409` — `LitenyxVerifyTopologyCommitment` (three-regime verdict table).
+- `:420-520` — pure boundary transition + `LitenyxCalculateExpectedTopologyFromChain`
+  (canonical-chain fold; internal sort proves path-independence).
+- `litenyx/LITENYX_validation.cpp:128-187` — enforcement integration.
+- `cpp_reference/test/test_litenyx_topology_authority.cpp:364-448` — determinism,
+  IBD==live, disconnect/reconnect identity, reorg prefix identity.
+
+## Surface A — canonical state encoding / hash (PASS)
+
+- **Field-by-field preimage, explicit widths, not struct memory.**
+  `LitenyxSerializeTopologyState` writes `nVersion|nHeight|nN|nLastTransition` as
+  fixed little-endian bytes via a `put32` lambda into a `[13]` buffer (`:223-236`)
+  — no `memcpy` of the struct, so platform padding/endianness cannot leak. All
+  validators hash exactly the same 13 semantic bytes.
+- **Version pins interpretation AND math.** `nVersion` is the first hashed field;
+  the header states changing `D_v1`/`M_c_v1`/downscale "REQUIRES a new nVersion +
+  activation height" (`:49-51`). The hash preimage therefore commits to the
+  version under which it was computed — a v1 hash cannot silently coexist with
+  altered v1 math without changing the committed bytes.
+- **Single hash domain.** The commitment value IS the frozen `TopologyStateHash`;
+  no separate domain/tag is introduced (`:342-352`), KAT-locked SHA256d.
+
+### F-TA-1 (FINDING, minor) — `nVersion` pins interpretation but not the math *implementation*
+The version field guarantees any change to `D_v1`/`M_c_v1`/downscale must bump
+`nVersion` to remain honest, and the KAT-locked hash makes a silent constant
+change detectable via divergent hashes. However, nothing *mechanically* prevents
+a future edit from altering `LITENYX_DEMAND_SCALE`/`LITENYX_MAX_BLOCK_WEIGHT`
+while leaving `nVersion=1` — the guarantee is by KAT + doctrine, not by type. See
+G-TA-1.
+
+## Surface B — regime / activation semantics (PASS)
+
+Frozen verdict table (`:374-407`), all fail-closed:
+
+| regime | absent | correct | mismatch |
+|---|---|---|---|
+| PreDerivation | Valid | (present->Invalid, premature) | Invalid |
+| SoftAdvisory | Valid | Valid | **AdvisoryMismatch** |
+| HardAuthority | **Invalid** | Valid | **Invalid** |
+
+- **Soft-advisory containment invariant HOLDS:**
+  `AdvisoryMismatch -> diagnostics only` and `AdvisoryMismatch -/-> persistent
+  alternative consensus truth`. In `SoftAdvisory`, a mismatch returns
+  `AdvisoryMismatch`, which enforcement maps to `LogPrintf(...) + return true`
+  (`validation.cpp:175-181`). The block is accepted, but **nothing about the
+  asserted (wrong) commitment is stored or fed forward** — see Surface C.
+- **Activation structural validity is enforced:** `IsValid()` couples
+  both-disabled, forbids `hDerive==0`, requires `hDerive <= hTopology` (`:82-88`);
+  DISABLED is an exact `== 0xFFFFFFFF` sentinel test, not "large height" (`:54-58`).
+
+### F-TA-2 (FINDING) — Soft->Hard transition cannot resurrect tolerated mismatches
+Decisive check for the flagged risk: a mismatch accepted during `SoftAdvisory`
+does **not** become an alternative ancestor state used by later `HardAuthority`
+reconstruction. Reason (proven by construction, Surface C): the expected state at
+any height is *recomputed from canonical block bodies*
+(`LitenyxCalculateExpectedTopologyFromChain`), which reads only `(chainId,
+GetBlockWeight)` per ancestor and **never reads any block's asserted
+`topologyCommitment`**. The soft-mode mismatch left the (correct) canonical
+ancestry unchanged; when the chain crosses into hard authority, reconstruction
+re-derives the *correct* expected state from that same ancestry. The tolerated
+wrong commitment has no persistence surface. Classified: invariant HOLDS.
+
+## Surface C — canonical reconstruction (PASS)
+
+- **Fold input is canonical-only.** `LitenyxCalculateExpectedTopologyFromChain`
+  consumes `std::vector<LitenyxCommittedBlock>{chainId, blockWeight}` indexed by
+  height, walks `OBS_WINDOW` boundaries in ascending order, aggregates `M_c_v1`
+  using the N active *at that boundary* (itself derived from earlier boundaries),
+  and applies the frozen controller (`:499-520`). No tracker, cache, mempool, or
+  asserted commitment is an input.
+- **Path-independence is proven, not asserted.** `LitenyxCalculateExpectedTopology`
+  sorts boundaries so the result is a function of the *set* of boundaries, not
+  insertion order (`:464-483`); KATs assert IBD==live at every boundary,
+  disconnect/reconnect identity, and reorg prefix identity
+  (`test:382-448`). Satisfies spec §0.1 "IBD/sequential/reorg yield byte-identical
+  hash."
+- **The §5.6 cache-independence invariant is explicit:** deleting every optional
+  cache/index must not change the result — it is the definition of authoritative
+  topology (`:497-498`).
+
+## Surface D — enforcement integration (PASS, fail-closed)
+
+`LitenyxCheckTopologyCommitment` (`validation.cpp:128-187`):
+
+1. Regime from frozen per-network activation.
+2. PreDerivation fast path: a present V2 commitment is rejected as premature.
+3. **Derive `expected` from canonical chain alone** via `LitenyxBuildCanonicalBlocks`
+   (reads ancestor bodies from disk) + `LitenyxCalculateExpectedTopologyFromChain`.
+4. Pure verify; map verdict to accept / advisory-log / `state.Invalid`.
+
+- **Fail-closed on unreadable history (decisive check):** a pruned/missing
+  ancestor body yields `litenyx-topo-reconstruct-unavailable`
+  (`validation.cpp:158-163`) — an explicit deterministic validation failure. There
+  is **no fallback** to tracker state, cached advisory state, the asserted block
+  commitment, or a default topology. This is the strongest form of the
+  fail-closed property.
+
+### F-TA-3 (FINDING, integration boundary) — reconstruction cost is O(height) per validated block
+`LitenyxBuildCanonicalBlocks` walks `pindexPrev` to genesis reading every ancestor
+body on each `CheckTopologyCommitment` call (`validation.cpp:113-122`). Correct
+and canonical, but O(height) disk reads per block with no memoization. This is a
+**performance/DoS-surface** observation, not a consensus-correctness issue; any
+future optimization MUST preserve the §5.6 invariant that caches cannot change the
+result (G-TA-2).
+
+## Central-question resolution
+
+YES. Every accepted block is bound to the topology state derived from its
+canonical ancestry: enforcement derives `expected` from ancestor bodies alone and
+requires the block's committed hash to equal `LitenyxExpectedTopologyCommitment(expected)`
+under hard authority; the asserted commitment is never an input to derivation;
+missing history fails closed. The four-surface pipeline is intact.
+
+## Guardrails (doctrine-level; no code change now)
+
+- **G-TA-1** — The v1 reconstruction constants (`LITENYX_DEMAND_SCALE`,
+  `LITENYX_MAX_BLOCK_WEIGHT`, `LITENYX_CONTROLLER_DOWNSCALE`) and the `D_v1`/`M_c_v1`
+  math are part of the `nVersion=1` consensus identity. Any change REQUIRES a new
+  `nVersion` + activation height; it may never ship while still claiming version 1.
+  (KAT-locked hash makes violations detectable; this guardrail makes the rule
+  explicit.)
+- **G-TA-2** — Any performance optimization of canonical reconstruction (e.g. a
+  topology index/cache to avoid the O(height) walk) MUST be provably equal to the
+  pure fold: deleting the cache must not change the result (spec §5.6).
+- **G-TA-3** — `AdvisoryMismatch` must remain diagnostics-only and must never be
+  persisted or fed into any later reconstruction; expected state is ALWAYS
+  recomputed from canonical ancestry, never from a stored/asserted commitment.
+
+## Disposition
+
+All four surfaces PASS; the central question resolves YES. F-TA-1 (math pinned by
+KAT/doctrine not type), F-TA-2 (soft->hard cannot resurrect mismatches — invariant
+holds), and F-TA-3 (O(height) reconstruction cost — perf/DoS, not correctness) are
+recorded. Guardrails G-TA-1..3 recorded. No frozen invariant reopened. Proceed to
+Component 4 (ChainId Lifecycle).
