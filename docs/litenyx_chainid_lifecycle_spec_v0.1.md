@@ -204,6 +204,37 @@ Ascending-by-`LaneId` ordering guarantees a single canonical encoding.
 > A genesis KAT (`LifecycleStateHash(L_0)`) MUST be pinned when serialization is
 > frozen in the engine step, exactly as the topology genesis KAT was pinned.
 
+### 3.2 Binding uniqueness (INVARIANT L1, LOCKED)
+
+> At every height `h`, `activeBindings` is a **bijection** between the active
+> lane set and its ChainId set:
+> - each active `TopologyLaneId` maps to **exactly one** active `ChainId`, and
+> - each active `ChainId` maps to **exactly one** active `TopologyLaneId`.
+>
+> A retired `ChainId` appears in **no** active binding at any subsequent height.
+
+### 3.3 Retirement knowledge — dense allocation (INVARIANT L2, LOCKED)
+
+`nextChainId` alone is a SUFFICIENT retirement oracle because allocation is
+**strictly sequential with no skipped IDs**:
+
+> Every `ChainId` in `[0, nextChainId)` has been allocated exactly once. Allocation
+> never skips a value (`G` always assigns `nextChainId` then increments by 1;
+> §4). Therefore, for any `chainId < nextChainId` that is NOT present in
+> `activeBindings`, the ChainId is definitively **retired** (§5.1). No explicit
+> per-ChainId historical status list is required in `L_h`; the pair
+> `(nextChainId, activeBindings)` fully determines each ChainId's status:
+>
+> | `chainId` vs `nextChainId` | in `activeBindings`? | status |
+> |---|---|---|
+> | `< nextChainId` | yes | **Active** |
+> | `< nextChainId` | no | **Retired** (permanent) |
+> | `>= nextChainId` | (n/a) | **Nonexistent** (not yet created) |
+>
+> If a FUTURE version ever introduces non-sequential or sparse allocation, L2 is
+> void and `L_h` MUST carry explicit historical status; such a change REQUIRES a
+> lifecycle `nVersion` bump (§3) and a new activation height (§8).
+
 ---
 
 ## 4. Authoritative lifecycle function `G` (pure)
@@ -213,12 +244,35 @@ L_h = G(L_{h-1}, T_{h-1}, T_h, h)
 ```
 
 - `L_{h-1}` is the authoritative lifecycle committed by the parent block.
-  Genesis seeds:
-  `L_0 = { version=1, nextChainId = MIN_CHAINS,
-           activeBindings = { (lane 0 → ChainId 0), (lane 1 → ChainId 1) },
-           lastLifecycleHeight = 0 }`
-  (i.e. the initial `MIN_CHAINS` lanes map to ChainIds `0..MIN_CHAINS-1`).
 - `T_{h-1}`, `T_h` are the FROZEN Phase-4 topology states (topology spec §3/§4).
+
+### 4.0 Genesis `L_0` (FROZEN)
+
+`L_0` is the identity relabeling of the FROZEN Phase-4 genesis topology `T_0`
+(topology spec §4: `nChains = MIN_CHAINS`, `activeChainIds = {0 .. MIN_CHAINS-1}`).
+The identity map is used at genesis (lane `i → ChainId i`):
+
+```text
+L_0 = {
+    nVersion            = 1,
+    nextChainId         = MIN_CHAINS,                     // first free ChainId
+    activeBindings      = { (lane i → ChainId i) : i in [0, MIN_CHAINS) },  // ascending by LaneId
+    lastLifecycleHeight = 0
+}
+```
+
+With the frozen constant `LITENYX_MIN_CHAINS = 2` this is concretely:
+
+```text
+L_0 = { nVersion=1, nextChainId=2,
+        activeBindings = { (lane 0 → ChainId 0), (lane 1 → ChainId 1) },
+        lastLifecycleHeight=0 }
+```
+
+> `LifecycleStateHash(L_0)` is the genesis KAT, pinned in the engine step (§13.2)
+> against the exact bytes of `SerializeLifecycleState(L_0)`. Because L2 holds
+> (§3.3), ChainIds `{0,1}` are Active and `nextChainId=2` marks all `>= 2` as
+> Nonexistent at genesis.
 
 `G` is pure: `G(L_{h-1}, T_{h-1}, T_h, h)` always yields the same `L_h`. It:
 
@@ -241,6 +295,30 @@ L_h = G(L_{h-1}, T_{h-1}, T_h, h)
 > occur ONLY as a consequence of a Phase-4 lane activation/retirement. There is
 > no independent "create chain" or "retire chain" transaction. (Reserved as
 > FUTURE; see §11.)
+
+### 4.1 Impossible / malformed transitions — `G` REJECTS, never repairs
+
+`G` consumes an AUTHORITATIVE `T_{h-1} → T_h` delta. It MUST NOT infer intent or
+silently repair a delta inconsistent with the FROZEN Phase-4 transition rules
+(topology spec §4: at most one split OR one merge per observation boundary; a
+split adds one lane, a merge removes one lane; `MIN_CHAINS <= N <= TOPO_MAX_CHAINS`).
+A delta that cannot arise from the frozen `F` is a CONSENSUS FAILURE, surfaced as
+an invalid lifecycle (§9), not absorbed:
+
+> **`G` MUST reject (fail closed) when:**
+> - both `A` and `R` are non-empty (a boundary cannot both split and merge);
+> - `|A| > 1` or `|R| > 1` (Phase-4 transitions move exactly one lane);
+> - a change occurs at a NON-boundary height (`Δ` non-empty while
+>   `h % OBS_WINDOW != 0`);
+> - an added lane is already bound in `activeBindings`, or a removed lane is
+>   absent from `activeBindings`;
+> - the resulting active lane set `!= T_h.activeChainIds` (§3 coherence);
+> - `|T_h.activeChainIds|` is outside `[MIN_CHAINS, TOPO_MAX_CHAINS]`.
+>
+> Because `T_h` is itself the frozen-Phase-4 authoritative state that already
+> passed the topology commitment check (§6.2 ordering), these conditions cannot
+> occur on a valid chain; `G`'s rejection is a defense-in-depth consensus assert,
+> NOT a place to reinterpret topology.
 
 ---
 
@@ -289,7 +367,28 @@ Phase 5 inherits Phase-4 boundary timing with NO off-by-one divergence:
 
 This choice keeps `ValidateExecutionContext` consistent with the committed
 `LifecycleStateHash` for the same block (no state can be "committed but not yet
-usable").
+usable"). Concretely: if `T_h` activates lane `L` at block `h`, then `G` creates
+its new `ChainId` in `L_h`, and **transactions in block `h`** MAY use that new
+`(TopologyLaneId, ChainId)` binding; conversely a `ChainId` retired in `L_h` is
+invalid for **transactions in block `h`** and forever after.
+
+### 5.3 Allocation exhaustion (INVARIANT L3, LOCKED — fail closed, never wrap)
+
+`ChainId` is a `uint32` (matching §3). `nextChainId` MUST NEVER wrap and MUST
+NEVER recycle:
+
+> If a boundary requires allocating a `ChainId` but `nextChainId` has reached its
+> maximum representable value (i.e. `nextChainId == UINT32_MAX`, so no further
+> distinct non-recycled ChainId can be handed out), the transition is a
+> CONSENSUS FAILURE (§9). `G` MUST fail closed; it MUST NOT wrap to a lower
+> value and MUST NOT recycle any retired ChainId.
+
+> **Sizing note (non-normative).** With `TOPO_MAX_CHAINS = 8`, exhaustion of a
+> 32-bit space requires on the order of 2^32 split events, which is
+> astronomically beyond any reachable chain length; `uint32` is chosen for
+> serialization compactness while L3 guarantees deterministic fail-closed
+> behavior at the theoretical boundary. A wider `ChainId` would only change the
+> constant, not the L3 rule.
 
 ---
 
@@ -406,6 +505,14 @@ The following are CONSENSUS-INVALID and MUST propagate `return false`:
 5. **Invalid execution context**: any asserted `chainId` that is not a valid
    active execution domain per §5.1 (not-yet-created, retired, or malformed).
 6. **Non-monotonic `nextChainId`** or a recycled `ChainId` (violates L0).
+7. **Non-bijective bindings** (violates L1): a lane bound to two ChainIds or a
+   ChainId bound to two lanes.
+8. **Sparse/skipped allocation** (violates L2): a hole in `[0, nextChainId)` that
+   is neither active nor accountably retired.
+9. **Impossible topology delta** consumed by `G` (§4.1): dual split+merge,
+   multi-lane move, non-boundary change, or lane-set incoherence with `T_h`.
+10. **Allocation exhaustion** (violates L3, §5.3): a required allocation with
+    `nextChainId == UINT32_MAX`. Fail closed; never wrap, never recycle.
 
 Observational bookkeeping failures remain contained and MUST NOT invalidate a
 block.
@@ -445,6 +552,33 @@ required proofs:
     consensus path in CI (regtest crossing `H_cid_derive` and `H_cid_enforce`),
     not merely in standalone proofs. Without this, `phase5-green` MUST NOT be
     tagged.
+
+### 10.1 Flagship vector — the identity distinction (MANDATORY)
+
+The single most important proof is the persistent-identity distinction itself:
+
+```text
+Scripted history:
+  split  → lane 2 activates      → ChainId 2   (nextChainId 2→3)
+  merge  → lane 2 retires        → ChainId 2 RETIRED (permanent)
+  split  → lane 2 reactivates    → ChainId 3   (nextChainId 3→4)
+
+Assertions at the final state:
+  ValidateExecutionContext(chainId=2) → Invalid (RETIRED), permanently
+  ValidateExecutionContext(chainId=3) → Valid, bound to lane 2
+  lane 2 is Active but its identity is ChainId 3, never ChainId 2 again
+```
+
+This vector MUST pass IDENTICALLY (same `LifecycleStateHash` at every height,
+same validity verdicts) across ALL FOUR derivation paths:
+
+1. **Sequential replay** (live connect).
+2. **IBD reconstruction** from the winning chain.
+3. **Disconnect / reconnect** across the merge and the second split.
+4. **Alternate reorg path** reaching the same tip via a different branch order.
+
+If this passes on all four, Phase 5's foundational claim (persistent,
+non-recycled, path-independent execution identity) is genuinely proven.
 
 ---
 
@@ -489,10 +623,13 @@ Phase 6+
    Freezes L0, the LaneId/ChainId reconciliation (§0), `ChainIdLifecycleState`
    (§3), `G` (§4), `ValidateExecutionContext` (§5), staged activation (§8), and
    the acceptance gate (§10).
-2. **Pure engine + golden vectors — no hook.** Implement `L_0`, `SerializeLifecycleState`
-   / `LifecycleStateHash` (pin genesis KAT), `G`, and `ValidateExecutionContext`
-   as standalone-testable pure code. Land golden-vector, persistence,
-   lane-coherence, and path-independence proofs FIRST.
+2. **Pure engine + golden vectors — no hook.** Implement, as standalone-testable
+   pure code, in this order:
+   `L_0` → `SerializeLifecycleState`/`LifecycleStateHash` (pin genesis KAT §4.0)
+   → `G` (§4, incl. §4.1 rejects) → `ValidateExecutionContext` (§5) → golden
+   vectors → lane-reuse/non-recycling proof (L0/L1/L2/L3) → boundary-timing proof
+   (§5.2) → IBD/reorg/path-independence proof (§0.4). The flagship vector (§10.1)
+   across all four derivation paths is the FIRST-class acceptance target.
 3. **Carrier.** Add the `V3` lifecycle-commitment carrier (§6.1) with framing +
    KAT proofs; V1/V2 remain byte-identical.
 4. **Daemon hook.** Only after (2)+(3) are green, wire Phase-5 derivation +
