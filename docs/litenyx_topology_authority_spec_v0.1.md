@@ -356,6 +356,58 @@ A / T_h     controller mean + decision  frozen Phase-3     0..100 -> topology
 This is version-pinned to `TopologyState.nVersion == 1`; changing any of
 `D_v1`, `M_c_v1`, or the downscale REQUIRES a new `nVersion` + activation height.
 
+### 5.6 Canonical-chain reconstruction (FROZEN — Phase 4B)
+
+**Source of truth: the canonical blockchain ALONE.** The authoritative `M_c_v1`
+inputs are reconstructed on demand from committed block data (`CBlockIndex` +
+block bodies) by walking the active chain — NEVER from the observational
+`LitenyxTopologyTracker`, and NEVER from a persisted topology cache.
+
+**INVARIANT (LOCKED, extends §0.1):**
+> The authoritative topology is derivable from the canonical blockchain alone.
+> Deleting every optional topology cache/index MUST NOT change consensus results.
+
+**Reconstruction (per boundary height `h`, `h % OBS_WINDOW == 0`):**
+```text
+active chain (CBlockIndex)
+        ↓  walk window [h-W+1, h]   (W = OBS_WINDOW = 100)
+per block: (chainId, GetBlockWeight(block))
+        ↓  D_v1(GetBlockWeight)  per block, bucketed by chainId
+per-chain samples
+        ↓  M_c_v1(c) = floor(mean of chain c's D_v1 samples)   [§5.5.5]
+mcV1ByChain   (index == chainId; size == N active AT boundary h)
+        ↓
+LitenyxDeriveTopologyAtBoundary(T_{h-1}, h, mcV1ByChain)
+```
+
+- **Zero-block chains** in the window aggregate to `M_c_v1 = 0` (idle),
+  identical to `M_c_v1({})`. Blocks whose `chainId >= N_active` are ignored.
+- **N is the count active AT the boundary** (itself derived from earlier
+  boundaries), so reconstruction and forward derivation use one consistent `N`.
+- **Path-independence (§0.1):** reconstruction reads canonical heights in order;
+  it never depends on block arrival/connection order. IBD, live connect,
+  restart, disconnect/reconnect, and reorg all reduce to deriving from the same
+  canonical prefix → identical `T_h` and `TopologyStateHash`.
+- **Engine functions:** `LitenyxReconstructMcV1Window(windowBlocks, nActive)`
+  and `LitenyxCalculateExpectedTopologyFromChain(state, chainBlocks, tip)` — pure,
+  standalone-proven (Phase 4B tests B1–B4).
+
+**Acceleration index (DEFERRED, not Phase 4B).** A dedicated persisted
+`height → per-chain weight` index MAY be added LATER purely as a *rebuildable
+acceleration* structure, with an explicit `indexed == reconstructed` test. It
+MUST NOT become the source of consensus truth.
+
+**Pruning (NORMATIVE consideration before activation).** Canonical
+reconstruction requires the block bodies (or at least each block's `chainId` +
+`GetBlockWeight`) within `[h-W+1, h]`. A validly pruned node may lack historical
+bodies. Therefore, BEFORE any network sets `H_topology` (i.e. before enabling the
+hard regime on a prunable network), the minimal per-block topology inputs
+(`chainId`, block weight) MUST be persisted in rebuildable consensus metadata
+(e.g. in `CBlockIndex`) so reconstruction never depends on prunable bodies. For
+Phase 4B (regtest/testnet, full nodes) this is satisfied by present block data;
+the pruning-safe metadata is a Phase 4B(3)/pre-mainnet requirement, tracked in
+§12.
+
 ---
 
 ## 6. Validation order (`ConnectBlock`)

@@ -127,13 +127,46 @@ inline int32_t LitenyxMcToControllerInput(int32_t mcV1)
     return r;
 }
 
-// A committed per-block sample for one height: the per-chain block weights of
-// the blocks that extended each active chain at this height. weightByChain[c]
-// is the canonical GetBlockWeight for chain c (0 if that chain had no block).
-struct LitenyxCommittedSample {
-    uint32_t height = 0;
-    std::vector<int64_t> weightByChain; // index == chainId; size == active N
+// ---- Canonical window reconstruction (spec §5.6) ---------------------------
+// A single committed block as seen by the AUTHORITATIVE path, carrying ONLY
+// canonical data: the chainId it extended and its consensus GetBlockWeight.
+// This is exactly what a node reconstructs by walking CBlockIndex/block bodies
+// along the active chain — NO tracker, NO cache, NO mempool.
+struct LitenyxCommittedBlock {
+    uint8_t chainId = 0;
+    int64_t blockWeight = 0; // canonical GetBlockWeight(block)
 };
+
+// Reconstruct the per-chain M_c_v1 vector for the window ending at a boundary,
+// from the raw committed blocks of that window. Pure: the result depends ONLY on
+// the multiset of (chainId, weight) in the window, and on nActive.
+//
+// Semantics (spec §5.6, matches the frozen tracker aggregation):
+//   - each block contributes D_v1(blockWeight) to its chain's window samples;
+//   - per-chain M_c_v1 = floor(mean of that chain's D_v1 samples);
+//   - a chain with ZERO blocks in the window => M_c_v1 = 0 (idle).
+// The output vector has size nActive (index == chainId), so it drops straight
+// into LitenyxDeriveTopologyAtBoundary.
+inline std::vector<int32_t> LitenyxReconstructMcV1Window(
+    const std::vector<LitenyxCommittedBlock>& windowBlocks,
+    uint8_t nActive)
+{
+    if (nActive < LITENYX_MIN_CHAINS) nActive = LITENYX_MIN_CHAINS;
+    if (nActive > LITENYX_TOPO_MAX_CHAINS) nActive = LITENYX_TOPO_MAX_CHAINS;
+
+    std::vector<int64_t> sumD(nActive, 0);
+    std::vector<int64_t> cntD(nActive, 0);
+    for (const auto& b : windowBlocks) {
+        if (b.chainId >= nActive) continue; // block on a non-active lane: ignored
+        sumD[b.chainId] += (int64_t)LitenyxDemandV1(b.blockWeight);
+        cntD[b.chainId] += 1;
+    }
+
+    std::vector<int32_t> mcV1(nActive, 0);
+    for (uint8_t c = 0; c < nActive; ++c)
+        mcV1[c] = (cntD[c] == 0) ? 0 : (int32_t)(sumD[c] / cntD[c]);
+    return mcV1;
+}
 
 // ---- TopologyState: the consensus-authoritative topology commitment (spec §3)
 // Minimal authoritative fields. nN is the active chain count; nLastTransition is
@@ -352,6 +385,43 @@ inline LitenyxTopologyState LitenyxCalculateExpectedTopology(
     for (const auto& kv : history.boundaries) {
         if (kv.first > tipHeight) break;
         state = LitenyxDeriveTopologyAtBoundary(state, kv.first, kv.second);
+    }
+    state.nHeight = tipHeight;
+    return state;
+}
+
+// ---- Canonical-chain derivation (spec §5.6) --------------------------------
+// The AUTHORITATIVE reconstruction: derive T_h from the canonical block sequence
+// ALONE. `chainBlocks` is the active chain's blocks indexed by HEIGHT (1-based:
+// chainBlocks[h-1] is the block at height h), each carrying only canonical
+// (chainId, GetBlockWeight). No tracker, no cache, no persisted topology index.
+//
+// At every OBS_WINDOW boundary h in [W, tipHeight], reconstruct the window
+// [h-W+1, h] from chainBlocks, aggregate per-chain M_c_v1 using the N active AT
+// that boundary (state.nN, which itself is derived from earlier boundaries), and
+// apply F. Path-independent by construction: it reads canonical heights in order
+// and never depends on arrival/connection order.
+//
+// INVARIANT (spec §5.6): deleting every optional cache/index MUST NOT change this
+// result — it is the definition of the authoritative topology.
+inline LitenyxTopologyState LitenyxCalculateExpectedTopologyFromChain(
+    LitenyxTopologyState state,
+    const std::vector<LitenyxCommittedBlock>& chainBlocks, // index == height-1
+    uint32_t tipHeight)
+{
+    const uint32_t W = LITENYX_TOPOLOGY_OBS_WINDOW;
+    if (tipHeight > chainBlocks.size())
+        tipHeight = (uint32_t)chainBlocks.size();
+
+    for (uint32_t h = W; h <= tipHeight; h += W) {
+        // Reconstruct the exact window [h-W+1, h] from canonical block data.
+        std::vector<LitenyxCommittedBlock> window;
+        window.reserve(W);
+        for (uint32_t g = h - W + 1; g <= h; ++g)
+            window.push_back(chainBlocks[g - 1]);
+
+        std::vector<int32_t> mcV1 = LitenyxReconstructMcV1Window(window, state.nN);
+        state = LitenyxDeriveTopologyAtBoundary(state, h, mcV1);
     }
     state.nHeight = tipHeight;
     return state;

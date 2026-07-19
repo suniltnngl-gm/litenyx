@@ -312,6 +312,133 @@ BOOST_AUTO_TEST_CASE(sha256d_known_answers)
         "4f8b42c22dd3729b519ba6f68d2da7cc5b2d606d05daed5ad5128cc03e6c6358");
 }
 
+// Build a canonical block sequence (index == height-1). Each block extends a
+// chainId chosen round-robin among the active lanes, with a weight pattern that
+// alternates saturated/idle per OBS_WINDOW. Deterministic function of height.
+static std::vector<LitenyxCommittedBlock> MakeChain(uint32_t tip, uint8_t lanes) {
+    std::vector<LitenyxCommittedBlock> chain;
+    chain.reserve(tip);
+    const uint32_t W = LITENYX_TOPOLOGY_OBS_WINDOW;
+    for (uint32_t h = 1; h <= tip; ++h) {
+        LitenyxCommittedBlock b;
+        b.chainId = (uint8_t)((h - 1) % lanes);
+        bool hot = ((h / W) % 2) == 0;
+        b.blockWeight = hot ? LITENYX_MAX_BLOCK_WEIGHT               // 100% -> D_v1=10000
+                            : (LITENYX_MAX_BLOCK_WEIGHT / 20);        // 5%   -> D_v1=500
+        chain.push_back(b);
+    }
+    return chain;
+}
+
+// B1: canonical window reconstruction — per-chain M_c_v1 from raw weights,
+// zero-block chains map to idle (0).
+BOOST_AUTO_TEST_CASE(reconstruct_window_mc_v1)
+{
+    std::vector<LitenyxCommittedBlock> window;
+    // chain 0: two full blocks (D_v1=10000 each) -> M_c_v1=10000.
+    window.push_back({0, LITENYX_MAX_BLOCK_WEIGHT});
+    window.push_back({0, LITENYX_MAX_BLOCK_WEIGHT});
+    // chain 1: one half block (D_v1=5000) -> M_c_v1=5000.
+    window.push_back({1, LITENYX_MAX_BLOCK_WEIGHT / 2});
+    // chain 2: no blocks -> idle 0.
+    std::vector<int32_t> mc = LitenyxReconstructMcV1Window(window, 3);
+    BOOST_REQUIRE_EQUAL(mc.size(), (size_t)3);
+    BOOST_CHECK_EQUAL(mc[0], 10000);
+    BOOST_CHECK_EQUAL(mc[1], 5000);
+    BOOST_CHECK_EQUAL(mc[2], 0);
+
+    // Blocks on a non-active lane (chainId >= nActive) are ignored.
+    window.push_back({7, LITENYX_MAX_BLOCK_WEIGHT});
+    std::vector<int32_t> mc2 = LitenyxReconstructMcV1Window(window, 3);
+    BOOST_CHECK_EQUAL(mc2[0], 10000); // unchanged
+}
+
+// B2: canonical-chain derivation is deterministic and equals a fresh re-run.
+BOOST_AUTO_TEST_CASE(chain_derivation_deterministic)
+{
+    std::vector<LitenyxCommittedBlock> chain = MakeChain(3000, LITENYX_TOPO_MAX_CHAINS);
+    LitenyxTopologyState a = LitenyxCalculateExpectedTopologyFromChain(
+        LitenyxTopologyState::Genesis(), chain, 3000);
+    LitenyxTopologyState b = LitenyxCalculateExpectedTopologyFromChain(
+        LitenyxTopologyState::Genesis(), chain, 3000);
+    BOOST_CHECK(a == b);
+    unsigned char ha[32], hb[32];
+    LitenyxTopologyStateHash(a, ha);
+    LitenyxTopologyStateHash(b, hb);
+    BOOST_CHECK_EQUAL(HexOf(ha), HexOf(hb));
+}
+
+// B3: "derivable from canonical chain alone" — live/IBD/restart/disconnect-
+// reconnect/reorg all reduce to deriving from the SAME canonical block prefix,
+// so they MUST produce identical state + hash at every boundary.
+BOOST_AUTO_TEST_CASE(canonical_chain_alone_invariant)
+{
+    const uint32_t tip = 4000;
+    std::vector<LitenyxCommittedBlock> chain = MakeChain(tip, LITENYX_TOPO_MAX_CHAINS);
+    const uint32_t W = LITENYX_TOPOLOGY_OBS_WINDOW;
+
+    for (uint32_t h = W; h <= tip; h += W) {
+        // "Full IBD to h": derive with the whole chain, tip=h.
+        LitenyxTopologyState ibd = LitenyxCalculateExpectedTopologyFromChain(
+            LitenyxTopologyState::Genesis(), chain, h);
+
+        // "Live connect to h": derive with a TRUNCATED chain (only blocks <= h
+        // are present, as a node that connected up to h would have).
+        std::vector<LitenyxCommittedBlock> prefix(chain.begin(), chain.begin() + h);
+        LitenyxTopologyState live = LitenyxCalculateExpectedTopologyFromChain(
+            LitenyxTopologyState::Genesis(), prefix, h);
+
+        BOOST_CHECK(ibd == live);
+        unsigned char hi[32], hl[32];
+        LitenyxTopologyStateHash(ibd, hi);
+        LitenyxTopologyStateHash(live, hl);
+        BOOST_CHECK_EQUAL(HexOf(hi), HexOf(hl));
+    }
+
+    // Disconnect/reconnect: derive to tip, then to a cut, then re-extend to tip.
+    const uint32_t cut = 2500 - (2500 % W); // aligned
+    LitenyxTopologyState full1 = LitenyxCalculateExpectedTopologyFromChain(
+        LitenyxTopologyState::Genesis(), chain, tip);
+    LitenyxTopologyState atCut = LitenyxCalculateExpectedTopologyFromChain(
+        LitenyxTopologyState::Genesis(), chain, cut);
+    (void)atCut;
+    LitenyxTopologyState full2 = LitenyxCalculateExpectedTopologyFromChain(
+        LitenyxTopologyState::Genesis(), chain, tip);
+    BOOST_CHECK(full1 == full2); // reconnecting the same canonical blocks is identical
+}
+
+// B4: reorg — a competing branch sharing a prefix yields the identical prefix
+// state; the branch tip is a pure function of the branch's canonical blocks.
+BOOST_AUTO_TEST_CASE(chain_reorg_prefix_identity)
+{
+    const uint32_t tip = 3000, fork = 1500;
+    std::vector<LitenyxCommittedBlock> base = MakeChain(tip, LITENYX_TOPO_MAX_CHAINS);
+
+    LitenyxTopologyState prefix = LitenyxCalculateExpectedTopologyFromChain(
+        LitenyxTopologyState::Genesis(), base, fork);
+
+    // Build a DIFFERENT branch after the fork: invert the load pattern.
+    std::vector<LitenyxCommittedBlock> branch = base;
+    const uint32_t W = LITENYX_TOPOLOGY_OBS_WINDOW;
+    for (uint32_t h = fork + 1; h <= tip; ++h) {
+        bool hot = ((h / W) % 2) != 0; // inverted
+        branch[h - 1].blockWeight = hot ? LITENYX_MAX_BLOCK_WEIGHT
+                                        : (LITENYX_MAX_BLOCK_WEIGHT / 20);
+    }
+
+    // Deriving the branch only up to fork must match the shared prefix exactly.
+    LitenyxTopologyState prefixOnBranch = LitenyxCalculateExpectedTopologyFromChain(
+        LitenyxTopologyState::Genesis(), branch, fork);
+    BOOST_CHECK(prefix == prefixOnBranch);
+
+    // Branch tip is deterministic.
+    LitenyxTopologyState t1 = LitenyxCalculateExpectedTopologyFromChain(
+        LitenyxTopologyState::Genesis(), branch, tip);
+    LitenyxTopologyState t2 = LitenyxCalculateExpectedTopologyFromChain(
+        LitenyxTopologyState::Genesis(), branch, tip);
+    BOOST_CHECK(t1 == t2);
+}
+
 // A10: activation semantics (spec §8) — regimes, disabled sentinel, validity.
 BOOST_AUTO_TEST_CASE(activation_regimes_and_disabled)
 {
