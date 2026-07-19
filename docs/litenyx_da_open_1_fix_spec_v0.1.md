@@ -7,6 +7,21 @@
 > (`litenyx_ecosystem_critique_v0.1.md`, Surface B / DA-OPEN-1). The FIRST gate is
 > the existing-state sufficiency audit (§1). No mechanism/serialization is
 > discussed until the audit resolves.
+>
+> **CORRECTION (post-review, latching audit).** An earlier draft of this spec
+> claimed the MERGE decision is decided at `h_obs` and EXECUTED ~COOLDOWN blocks
+> later, yielding a pre-transition window. **That is FALSE.** Verified against
+> `LitenyxDeriveTopologyAtBoundary` (`LITENYX_topology_authority.h:420-443`): the
+> decrement `N -> N-1` is applied IMMEDIATELY at the boundary where MERGE is
+> decided, and `nLastTransition = TransitionHeight(h_obs)` is a FORWARD-DATED
+> COOLDOWN FLOOR for the NEXT decision — NOT a scheduled execution of THIS one. The
+> Phase-5 retirement fold runs at the SAME boundary (`LITENYX_chainid_lifecycle.h
+> :356-373`). Therefore decision, decrement, and retirement are COINCIDENT at one
+> boundary `h`; there is NO pre-transition determinacy and `MergeDecided` is NOT a
+> latched pre-transition fact. Sections below are corrected accordingly; DA-OPEN-1
+> is downgraded from RESOLVED to PARTIALLY ADVANCED. The reconstructibility
+> breakthrough is preserved; the "makes drain REQUIRED before retirement" claim is
+> withdrawn.
 
 ## 0. The gate question (frozen)
 
@@ -50,193 +65,230 @@ which of three outcomes holds:
 | F5 | Phase-5 `L_h` active bindings; edge = `AuthoritativeLane == N_h-1` (`LITENYX_draining_authority.h:158-166`) | the CURRENT edge identity | YES | yes |
 | F6 | Phase-6 authority AUTHORIZED for the edge identity | eligibility precondition | YES | yes |
 
-### 1.2 The decisive finding — the MERGE decision is pre-transition AND canonically reproducible
+### 1.2 What IS established — reconstructibility (breakthrough, retained)
 
-The spec v0.2 F-B framing said there is "no ready-made pre-transition committed
-pressure state." The audit REFINES this with implementation evidence:
-
-- The controller decision consumes an observation vector `obs` (`M_c` per lane,
-  `LITENYX_topology.h:64-74`). This vector is **not** advisory-tracker-only: the
-  consensus authority path reconstructs it FROM CANONICAL BLOCK BODIES via
-  `LitenyxReconstructMcV1ForWindow` (`LITENYX_topology_authority.h:173-183`, feeding
-  `LitenyxDeriveNextTopologyState` / `LitenyxCalculateExpectedTopologyFromChain`,
-  `:428-434,499`). Block weights are canonical `GetBlockWeight`
-  (`LITENYX_validation.cpp:111,121`). So `A` and hence the MERGE decision are a PURE
-  FUNCTION of canonical block bodies over the window `[h_obs-W+1, h_obs]`.
-- The decision is taken at the OBSERVATION boundary `h_obs`, but the transition is
-  RECORDED at `TransitionHeight(h_obs)` = first OBS_WINDOW boundary ≥ `h_obs +
-  COOLDOWN` (`LITENYX_topology.h:112-122,136`). With `OBS_WINDOW=100`,
-  `COOLDOWN=200`, this is a gap of at least COOLDOWN blocks.
-
-Therefore a **pre-transition, consensus-reproducible merge-pressure fact EXISTS**:
-at boundary `h_obs`, every validator can independently compute
-`MergeDecided(h_obs) := LitenyxTopoDecide(reconstructed obs, N, h_obs, lastT) ==
-MERGE`, strictly before the transition it will cause. This is NOT a new committed
-state (DA-NOGO-3 respected) — it is a DERIVATION over already-canonical block
-bodies, exactly the derivation P4/P5/P6 already perform.
-
-### 1.3 Which identity — no prediction beyond the frozen fold
-
-If a MERGE is recorded, F4 makes it DETERMINISTIC that the retired identity is the
-one on the highest lane at the transition. The frozen eligibility (F5/F6, spec
-§4.4.4) already restricts drain to the CURRENT edge identity (`AuthoritativeLane ==
-N_h-1`). Between `h_obs` (merge decided) and the transition, the edge identity is
-knowable from `L_h`. No MERGE_INTENT and no RetireHeight are needed: we do not
-predict WHEN retirement lands (that stays emergent, D9/DA-NOGO-2); we observe that a
-merge has been DECIDED and that the structurally-removable identity is the current
-edge.
-
-### 1.4 Gate verdict — OUTCOME (b)
+The controller decision consumes an observation vector `obs` (`M_c` per lane,
+`LITENYX_topology.h:64-74`). This vector is **not** advisory-tracker-only: the
+consensus authority path reconstructs it FROM CANONICAL BLOCK BODIES via
+`LitenyxReconstructMcV1Window` (`LITENYX_topology_authority.h:173-183`), feeding
+`LitenyxDeriveTopologyAtBoundary` / `LitenyxCalculateExpectedTopologyFromChain`
+(`:420-443,499`). Block weights are canonical `GetBlockWeight`
+(`LITENYX_validation.cpp:111,121`). So `A` and hence the MERGE decision are a PURE
+FUNCTION of canonical block bodies over the window `[h-W+1, h]`.
 
 ```
-Existing OBSERVATIONS are SUFFICIENT. No new committed state is required. A NEW,
-PURE, DETERMINISTIC Phase-7 DERIVATION over already-canonical block bodies + L_h
-+ Phase-6 authority can define RequiredToDrain(id, h). Outcome (c) is REFUTED;
-outcome (a) is nearly true but the fact is a DERIVATION, not a single stored field.
+ESTABLISHED: MergeDecided(h) := ( LitenyxTopoDecide(Reconstruct(bodies,h), N, h, lastT)
+                                  == MERGE )   is CANONICALLY RECONSTRUCTIBLE.
 ```
 
-Consequence for the no-gos: DA-NOGO-3 is HONORED (no new snapshot/committed
-surface); DA-NOGO-1/2 are HONORED (no intent, no RetireHeight — we key on the
-DECIDED-merge derivation + edge, not on a stored retirement schedule). The
-ChainCountController link is DEMONSTRATED, not inherited: it is the merge DECISION,
-recomputed from canonical bodies, and it is connected to drain entry ONLY through
-the edge-identity eligibility the frozen engine already requires.
+This alone refines the spec v0.2 F-B wording (see §1.6 reconciliation): a
+deterministic merge FACT is reconstructible from canonical bodies with no new
+committed state. That part of the breakthrough stands.
 
-### 1.5 Information-deficit note (why outcome (c) fails)
+### 1.3 What is NOT established — no pre-transition latching (the load-bearing correction)
 
-There is NO information deficit for ENTRY. The only thing genuinely NOT derivable
-pre-transition is the exact retirement HEIGHT (F-A: emergent inside one fold under
-cooldown/boundary interaction). But entry does not need the retirement height —
-`DrainStartHeight` is an OBS_WINDOW boundary chosen at/after the decided merge, and
-completion is subordinate to actual Phase-5 retirement (D9). So the deficit that
-DID motivate leaving emission OPEN (a pre-transition COMMITTED intent) is dissolved:
-the pressure fact is reproducible without committing anything.
+The review question was whether `MergeDecided(h_obs) => MergeExecuted(h_transition)`
+with a gap between them. **It does not, because there is no gap:**
 
-## 2. Minimal canonical fact (the answer to the gate)
+- `LitenyxDeriveTopologyAtBoundary` (`LITENYX_topology_authority.h:434-441`): when
+  `d != HOLD` and `newN != prev.nN`, it sets `next.nN = newN` **at `hObs` itself**.
+  The decrement is IMMEDIATE at the decision boundary.
+- `next.nLastTransition = LitenyxTopoTransitionHeight(hObs)` (`:439`) is a
+  FORWARD-DATED value used ONLY by the cooldown guard of the NEXT decision
+  (`LitenyxTopoDecide`: `since = h_obs - lastTransition; if since < COOLDOWN return
+  HOLD`, `LITENYX_topology.h:118-122`). It is a COOLDOWN FLOOR, not a scheduled
+  execution of the current merge.
+- The Phase-5 retirement fold runs at the SAME boundary `h`
+  (`LITENYX_chainid_lifecycle.h:356-373`): `LitenyxDeriveTopologyAtBoundary(...,h)`
+  then `LitenyxAdvanceChainIdLifecycle(Nprev, Ncur, h)` retires the highest lane in
+  the SAME iteration.
+- No latched "pending merge" survives across boundaries. Idle pressure at an earlier
+  boundary that is suppressed by cooldown is RE-EVALUATED FRESH later; earlier
+  idleness does NOT imply a later merge.
+
+```
+CONSEQUENCE:  decision  ≡  decrement  ≡  retirement,   all COINCIDENT at boundary h.
+              MergeDecided(h)  ∧  Active(id_edge, h)   is CONTRADICTORY for the
+              retiring edge identity — it is Retired within the SAME fold at h.
+```
+
+So `MergeDecided` is a canonical **pressure/decision fact**, but it is COINCIDENT
+with retirement, NOT a **pre-transition** determinant. An `id` "required to drain"
+at `h` on the strength of `MergeDecided(h)` would be the very identity that has
+ALREADY retired at `h` — draining would begin and be moot in the same fold. This is
+the failure mode the review anticipated.
+
+### 1.4 Gate verdict — OUTCOME (b*), NOT full resolution
+
+```
+Existing OBSERVATIONS are SUFFICIENT to RECONSTRUCT a deterministic merge fact with
+NO new committed state (breakthrough retained). But that fact is COINCIDENT with
+retirement, so it does NOT by itself establish a canonical fact that makes an
+identity REQUIRED to drain BEFORE it retires. DA-OPEN-1 is PARTIALLY ADVANCED, not
+resolved. Outcome (c) is NOT refuted for the specific 'pre-retirement requirement'
+question: there is an INFORMATION-TIMING deficit (see §1.5).
+```
+
+### 1.5 Information-deficit proof (the residual, honestly stated)
+
+- Reconstructible pre-`h`: idle PRESSURE readings (`A < HYST_LOW`) at boundaries
+  during cooldown — but these are NOT decisions (suppressed to HOLD) and do NOT
+  determine that a merge will execute at the next post-cooldown boundary (fresh
+  re-evaluation may not be idle).
+- NOT reconstructible before `h`: the FACT that a merge WILL execute at `h`. It is
+  only known AT `h`, coincident with the retirement it causes.
+- Therefore the specific quantity DA-OPEN-1 asks for — a canonical fact, available
+  BEFORE retirement, that makes the edge identity REQUIRED to drain — has a genuine
+  timing deficit under the frozen controller. It is not an ABSENCE of the merge
+  fact; it is that the merge fact does not exist earlier than the retirement.
+
+This deficit is exactly what the frozen spec §4.4.5 already suspected ("no
+ready-made PRE-TRANSITION committed pressure state"); the audit CONFIRMS it for
+determinacy while CORRECTING it for reconstructibility (§1.6).
+
+### 1.6 Reconciliation with the frozen Phase-7 record (DA-NOGO-1 intact)
+
+Two distinct statements must not be conflated:
+
+```
+(S1) "No committed MERGE_INTENT FIELD exists."          -> STILL TRUE (F-B). DA-NOGO-1 intact.
+(S2) "No deterministic pre-transition merge FACT can be reconstructed." -> IMPRECISE.
+      Corrected: a deterministic merge fact IS reconstructible, but only AT the
+      transition boundary (coincident), NOT strictly before it.
+```
+
+- DA-NOGO-1 is preserved: we introduce no `MERGE_INTENT` field and add no committed
+  state. The reconstructed `MergeDecided` is a derivation, not a commitment.
+- The spec v0.2 §4.4.5 conclusion (emission OPEN) is UPHELD, now with a sharper
+  reason: it is not that the merge decision is unreconstructible, but that it is not
+  available BEFORE the retirement it triggers, so it cannot ground a "required to
+  drain first" entry without either (i) accepting a coincident/after-the-fact drain
+  (operationally moot for the retiring edge), or (ii) a NEW pre-transition signal
+  (which DA-NOGO-3 forbids assuming and whose necessity is now PROVEN by §1.5).
+
+## 2. Canonical fact established (reconstructibility) — and its timing limit
 
 ```
 MergeDecided(h) := ( LitenyxTopoDecide(ReconstructObs(bodies, h), N_h, h, lastT_h)
                      == MERGE )                                   # pure over canonical bodies
 ```
 
-This is the minimal canonical, consensus-visible fact that distinguishes "eligible"
-from "required": an identity is REQUIRED to enter draining only in a window where a
-MERGE has actually been DECIDED (idle pressure `A < HYST_LOW`), i.e. the structural
-contraction that will remove the edge is already in motion.
+`MergeDecided(h)` is a genuine canonical, consensus-visible fact — reconstructible
+from block bodies with NO new committed state. **But (§1.3) it is COINCIDENT with the
+merge decrement and the edge retirement at the SAME boundary `h`.** It therefore
+CANNOT distinguish "eligible" from "required-BEFORE-retirement": at `h`, the edge
+identity that `MergeDecided(h)` points at is already `Retired`. `MergeDecided` is thus
+a valid derivation but the WRONG TIMING to answer the gate as originally posed.
 
-## 3. RequiredToDrain (deterministic predicate)
+## 3. RequiredToDrain — WITHDRAWN as a pre-retirement entry rule
 
-```
-RequiredToDrain(id, h) :=
-    ActivationValid_P7(h)                                   # §6 drain regime derived
-  ∧ (h % OBS_WINDOW == 0)                                    # boundary-aligned
-  ∧ MergeDecided(h)                                          # §2 canonical merge-pressure fact
-  ∧ ClassifyChainId(L_h, id) == Active                       # P5 (frozen)
-  ∧ Phase6Authority(id, h) == AUTHORIZED                     # P6 (frozen)
-  ∧ AuthoritativeLane(L_h, id) == N_h - 1                    # edge-only (frozen §4.4.4)
-  ∧ ¬ExistingDrainCommitment(id)
-```
-
-Relationship to the frozen `P7-DRAIN-ELIGIBLE` (spec §4.4.4):
+The earlier formulation
 
 ```
-RequiredToDrain(id, h)  ==  P7-DRAIN-ELIGIBLE(id, h)  ∧  MergeDecided(h)
+RequiredToDrain(id, h)  ?=  P7-DRAIN-ELIGIBLE(id, h)  ∧  MergeDecided(h)
 ```
 
-i.e. REQUIRED is strictly ELIGIBLE plus the newly-established canonical merge-decision
-fact. Eligibility is a necessary-but-insufficient condition (an edge identity is
-always eligible); the merge decision is the causal fact that promotes eligibility to
-requirement. This DEMONSTRATES (not inherits) the controller↔drain link: no merge
-decided => not required, even though still eligible.
+is **WITHDRAWN**. It is ill-timed: `MergeDecided(h) ∧ Active(id_edge, h)` is
+contradictory (§1.3), so the predicate would either be vacuously false for the
+retiring edge, or — if evaluated one boundary earlier without `MergeDecided` — reduce
+to bare eligibility (no requirement at all). Neither yields a canonical fact that
+makes drain REQUIRED before retirement.
 
-- **Purity / determinism (D5):** every term is a pure function of canonical block
-  bodies + frozen P4/P5/P6 engines. Path-independent, fail-closed.
-- **No frozen surface touched (D4/G-DA-1):** `MergeDecided` REUSES the existing
-  reconstruction; it adds no committed field and does not alter P4/P5/P6.
-- **No RetireHeight / MERGE_INTENT (DA-NOGO-1/2):** requirement keys on the DECIDED
-  merge derivation + current edge, never on a stored intent or schedule.
+Three honestly-scoped candidate directions remain (NOT selected here; each needs its
+own justification against the no-gos):
 
-## 4. DrainCommitment provenance (closing the D12 statement)
+- **C-A (accept coincident/near-retirement drain).** Treat drain as operationally
+  meaningful only in the window leading up to `h` using idle PRESSURE (not decision).
+  Requires proving a pressure threshold that is both reconstructible pre-`h` AND does
+  not misfire (cooldown re-evaluation breaks determinacy — §1.5). Currently unproven.
+- **C-B (accept the unbounded/consequence-only drain, D10).** Do NOT make drain
+  REQUIRED at all; keep it a capability MODE that, if entered, monotonically
+  restricts, with completion = emergent retirement (D9). This ACCEPTS that "required
+  to drain" may have no canonical pre-retirement trigger — consistent with the frozen
+  engine, which never claimed one. Lowest risk; leaves emission OPEN as v0.2 did.
+- **C-C (introduce a new pre-transition signal).** Its NECESSITY is now PROVEN
+  (§1.5), but DA-NOGO-3 forbids ASSUMING it; adopting it is a deliberate new-committed-
+  state decision that reopens the "reopen Phase-4?" question and must be escalated,
+  not made at fix time.
 
-With `RequiredToDrain` established, the deferred provenance predicate (spec §4.4.5/
-§4.4.6, `ReproduceDrainCommitment` / `DrainDecisionEngine`) becomes DEFINABLE
-without new committed state:
+## 4. DrainCommitment provenance — advanced, not closed
 
-```
-DrainDecisionEngine(CanonicalState_h) :=
-    { DrainCommitment(id, DrainStartHeight = h)
-      | id such that RequiredToDrain(id, h) }               # deterministic, possibly empty
-```
+`DrainDecisionEngine` / full D12 provenance CANNOT be declared satisfiable, because it
+depends on a `RequiredToDrain` that is now withdrawn (§3). What the audit DID buy:
 
-- **Determinism:** because `RequiredToDrain` selects at most the single current edge
-  identity (`AuthoritativeLane == N_h-1` is unique, L1), the engine's output at any
-  boundary `h` is a deterministic set of size 0 or 1. Every validator reproduces it
-  identically from canonical bodies.
-- **P7-DRAIN-VALIDATE (spec §4.4.6) now satisfiable:**
-  ```
-  Valid(C, h) ⇔ C ∈ DrainDecisionEngine(CanonicalState_h) ∧ P7-DRAIN-ELIGIBLE(C.id, h)
-  ```
-  A commitment is valid IFF every validator reproduces exactly `(id, h)` — the full
-  D12 statement, no longer only its semantics half.
-- **Non-discretionary (§4.4.5):** emission is not proposed by any actor; it is the
-  deterministic image of `DrainDecisionEngine` over canonical state. A discretionary
-  proposal that does not equal the engine output is invalid (fail closed). This
-  eliminates the "actor forces MayBind 1->0" hazard that justified rejecting
-  discretionary emission.
+- The reconstructibility half is proven: any decision predicate over canonical bodies
+  IS reproducible by every validator (the mechanical prerequisite for D12).
+- The remaining gap is purely the CHOICE of trigger timing (C-A/C-B/C-C), not a
+  mechanical inability to reproduce it.
 
-> **Scope line.** This spec RESOLVES the causal fact (`RequiredToDrain`) and shows
-> the provenance predicate is now definable. It does NOT yet freeze the emitter's
-> operational form (autonomous recompute at each boundary vs a carried commitment
-> whose provenance is re-checked), nor the byte layout, hook, or recovery — those
-> are the follow-on increment, now UNBLOCKED because the input fact exists.
+So D12 moves from "semantics-half only, mechanism unknown" to "semantics-half proven
++ reproduction-mechanism proven; TRIGGER SEMANTICS still OPEN." That is real progress
+without overclaiming.
 
 ## 5. Interaction with frozen invariants / no-gos (cross-check)
 
 | Constraint | Interaction | Result |
 | --- | --- | --- |
-| DA-NOGO-1 (no MERGE_INTENT) | uses recomputed MERGE DECISION, not a stored intent field | honored |
-| DA-NOGO-2 (no RetireHeight) | entry keys on decided-merge + edge; completion stays emergent (D9) | honored |
-| DA-NOGO-3 (no new snapshot) | `MergeDecided` is a derivation over existing bodies; zero new committed state | honored |
-| §4.4.5 (no discretionary emission) | emission == deterministic engine image; discretionary != engine is invalid | honored |
+| DA-NOGO-1 (no MERGE_INTENT) | S1 upheld (no field); `MergeDecided` is a derivation, not a committed intent (§1.6) | honored |
+| DA-NOGO-2 (no RetireHeight) | no retire height introduced; completion stays emergent (D9) | honored |
+| DA-NOGO-3 (no new snapshot) | none assumed; C-C's necessity proven but NOT adopted here | honored |
+| §4.4.5 (no discretionary emission) | emission stays OPEN; no discretionary path added | honored |
 | D4 / G-DA-1 (no frozen mutation) | reuses P4 reconstruction; adds/serializes nothing | honored |
-| D0 (DRAINING is a mode) | unchanged; this fixes ENTRY provenance only | honored |
-| D9 / G-DA-2 (completion = P5 retirement) | untouched; retirement height still not needed/committed | honored |
-| G-DA-3 (identity-keyed) | `RequiredToDrain`/engine key on PersistentChainId | honored |
-| controller-link demonstrated | REQUIRED = ELIGIBLE ∧ MergeDecided; no-merge => not required | demonstrated, not inherited |
+| D0 (DRAINING is a mode) | unchanged | honored |
+| D9 / G-DA-2 (completion = P5 retirement) | untouched | honored |
+| D10 (unbounded drain permitted) | C-B leans on this; consequence now explicit, not accidental | consistent |
+| G-DA-3 (identity-keyed) | any future predicate keys on PersistentChainId | honored |
+| controller-link | shown to be COINCIDENT (not pre-transition); link demonstrated but ill-timed for entry | corrected |
 
-## 6. Open sub-questions deferred to the follow-on increment
+## 6. Open sub-questions carried forward
 
-- **DA-Q1** — Emitter operational form: recompute `DrainDecisionEngine` at each
-  boundary (stateless, no carrier) vs commit a carrier whose provenance is
-  re-validated. The causal fact supports BOTH; pick in the serialization increment.
-- **DA-Q2** — `MergeDecided` reconstruction cost at scale: it reuses the P4 window
-  reconstruction (already on the consensus path), so cost is bounded by existing
-  behavior; confirm no additional full-chain walk beyond P4's window.
-- **DA-Q3** — Cooldown/boundary interaction edge cases: a merge decided at `h_obs`
-  but the edge identity changes before `DrainStartHeight` — the edge-only + Active
-  re-check at the evaluated boundary already fail-closes; enumerate against KATs.
-- **DA-Q4** — Whether `DrainStartHeight` must equal the decision boundary `h` or may
-  be a later boundary before the transition; both are eligible, choose in follow-on.
-- **DA-Q5 (from PR-W1)** — if a future phase adds concurrent same-height per-lane
-  blocks, both `MergeDecided` reconstruction and edge uniqueness must be revisited
-  under the extended SS-INV-2 order.
+- **DA-Q1 (was the gate; now the residual)** — Choose the drain-entry trigger among
+  C-A (pre-`h` pressure, must first PROVE a determinate reconstructible threshold
+  despite cooldown re-evaluation), C-B (no required trigger; consequence-only drain
+  under D10), or C-C (new pre-transition signal — necessity proven §1.5, adoption is
+  an escalated new-committed-state decision, DA-NOGO-3). RECOMMEND C-B as the
+  lowest-risk default consistent with the frozen engine, pending a decision.
+- **DA-Q2** — If C-A is pursued: is there ANY canonical pre-`h` quantity that
+  determines a merge at `h` under the cooldown/fresh-re-evaluation semantics (§1.5)?
+  Current analysis says NO; a rigorous impossibility proof (or counterexample) should
+  be produced before C-A is entertained.
+- **DA-Q3** — `MergeDecided` reconstruction cost reuses the P4 window reconstruction
+  (already on the consensus path); confirm no additional full-chain walk.
+- **DA-Q4 (from PR-W1)** — future concurrent same-height per-lane blocks would break
+  edge uniqueness AND the coincidence analysis; revisit under extended SS-INV-2.
 
 ## 7. Disposition
 
-DA-OPEN-1's gate is RESOLVED at **audit outcome (b): existing canonical observations
-are sufficient; no new committed state is required.** The minimal canonical fact is
-`MergeDecided(h)` — the frozen ChainCountController's MERGE decision, RECONSTRUCTED
-from canonical block bodies (the same reconstruction P4/P5/P6 use), which is BOTH
-pre-transition (decided at `h_obs`, recorded ≥ COOLDOWN later) AND
-consensus-reproducible. This refutes the earlier "no pre-transition pressure state"
-framing WITHOUT reopening Phase-4: it is a derivation, not a commitment. From it,
-`RequiredToDrain(id, h) = P7-DRAIN-ELIGIBLE(id, h) ∧ MergeDecided(h)` gives the
-causal fact that promotes eligibility to requirement, keyed on the current edge
-identity (unique, L1) and PersistentChainId (ABA-safe). This makes
-`DrainDecisionEngine` deterministic (output size 0/1) and the full D12
-`P7-DRAIN-VALIDATE` provenance statement satisfiable, dissolving the hazard that
-justified rejecting discretionary emission. All of DA-NOGO-1..3, §4.4.5, D0/D4/D9,
-and G-DA-1..4 are honored; the controller↔drain relationship is DEMONSTRATED, not
-inherited. No frozen surface is reopened. The emitter operational form,
-serialization, daemon hook, and Phase-7 recovery remain the follow-on increment —
-now UNBLOCKED because the drain-entry causal fact exists and is canonical.
+DA-OPEN-1 is **PARTIALLY ADVANCED, NOT resolved.** The load-bearing latching audit
+requested in review CORRECTS an error in the prior draft:
+`LitenyxDeriveTopologyAtBoundary` (`LITENYX_topology_authority.h:434-441`) applies the
+`N -> N-1` decrement IMMEDIATELY at the boundary where MERGE is decided, and
+`nLastTransition = TransitionHeight(h_obs)` is a forward-dated COOLDOWN FLOOR for the
+NEXT decision — NOT a scheduled execution of the current one. The Phase-5 retirement
+fold runs at the SAME boundary. Hence:
+
+```
+MergeDecided(h)  ≢  a pre-transition determinant;
+decision ≡ decrement ≡ retirement are COINCIDENT at h, so
+MergeDecided(h_obs) ⇏ (a window in which the edge is Active-but-required-to-drain).
+```
+
+The `RequiredToDrain = ELIGIBLE ∧ MergeDecided` formulation is **WITHDRAWN** (§3):
+it would target an identity already `Retired` in the same fold. What SURVIVES and is
+valuable: **`MergeDecided(h)` is a genuine canonical, consensus-reconstructible merge
+fact requiring NO new committed state** — this REFINES the frozen record by
+distinguishing S1 ("no committed `MERGE_INTENT` field" — still TRUE, DA-NOGO-1 intact)
+from S2 ("no reconstructible merge fact" — corrected: reconstructible, but only
+COINCIDENT with retirement, not before). The residual is a genuine information-TIMING
+deficit (§1.5), which UPHOLDS the spec v0.2 decision to leave emission OPEN, now with
+a proven reason.
+
+Net: the reconstructibility breakthrough is banked; the unbounded/consequence-only
+nature of drain (D10) is now an EXPLICIT accepted consequence rather than an accident;
+and the true remaining question is a TRIGGER-TIMING choice (C-A / C-B / C-C, DA-Q1),
+not a mechanical reproducibility gap. No frozen surface reopened; no new committed
+state introduced; DA-NOGO-1..3, §4.4.5, D0/D4/D9/D10, G-DA-1..4 all honored. Because
+DA-OPEN-1 is not fully resolved, the Component-7 note that XCT carries DA-OPEN-1 as a
+CONDITIONAL upstream dependency remains in force: XCT design may proceed (drain
+enforcement is intentionally not integrated), but must NOT assume a resolved
+drain-entry trigger.
