@@ -66,7 +66,7 @@ struct LitenyxChainObservation {
     // Explicit ctors so brace-init works under the daemon's C++ standard (a
     // default member initializer would make this a non-aggregate pre-C++14).
     LitenyxChainObservation() : M_c(0) {}
-    explicit LitenyxChainObservation(int32_t mc) : M_c(mc) {}
+    LitenyxChainObservation(int32_t mc) : M_c(mc) {}
 };
 
 // A per-chain observation vector (index == chainId). Defined here so both the
