@@ -53,8 +53,32 @@ bool LitenyxConnectSharedState(const CBlock& block, CValidationState& state)
 {
     uint8_t nChainId = block.nyx_aux.chainId;
 
-    // Phase 1: check ALL inputs are globally unspent BEFORE mutating the set, so
-    // a rejected block never leaks partial records into the shared state.
+    // INT-OPEN-1 / M3: this hook runs inside ConnectBlock (ConnectTip:2333), which
+    // has a LATER failure-capable step (FlushStateToDisk, ConnectTip:2348). We must
+    // NOT mutate the live shared set here, or a block that later fails to connect
+    // would leak spends (R1/R3/SS-INV-4). Instead we STAGE into the attempt-scoped
+    // candidate delta installed by LitenyxSpendPublishScope on the ConnectTip path;
+    // the tail publishes it only after the last failure-capable step succeeds.
+    LitenyxCandidateSpendDelta* delta = LitenyxActiveCandidateDelta();
+
+    if (delta != nullptr) {
+        // Stage every input. StageSpend rejects on live-set conflict (cross-chain /
+        // prior-block double spend) OR within-block/batch double spend, WITHOUT
+        // touching the live singleton. A staged reject is the consensus rejection.
+        for (const CTransactionRef& tx : block.vtx) {
+            if (tx->IsCoinBase()) continue;
+            for (const CTxIn& txin : tx->vin) {
+                if (!delta->StageSpend({txin.prevout.hash, txin.prevout.n}, nChainId)) {
+                    return state.Invalid(false, 0,
+                                         "Litenyx global double spend (cross-chain) rejected");
+                }
+            }
+        }
+        return true;
+    }
+
+    // Fallback (no active ConnectTip attempt, e.g. legacy/test callers): preserve
+    // the original check-then-commit-live behavior so those paths are unchanged.
     for (const CTransactionRef& tx : block.vtx) {
         if (tx->IsCoinBase()) continue;
         for (const CTxIn& txin : tx->vin) {
@@ -64,8 +88,6 @@ bool LitenyxConnectSharedState(const CBlock& block, CValidationState& state)
             }
         }
     }
-
-    // Phase 2: now commit all spends (guaranteed unspent at this point).
     for (const CTransactionRef& tx : block.vtx) {
         if (tx->IsCoinBase()) continue;
         for (const CTxIn& txin : tx->vin) {

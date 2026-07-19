@@ -148,22 +148,64 @@ an M3 design change.
 
 ---
 
-## 4. Test obligations (must accompany the code, KAT-style)
+## 4. Test obligations — status
 
-1. **R3 / SS-INV-4 (core):** simulate `ConnectBlock(B)=success` then
-   `FlushStateToDisk=fail` ⇒ assert live set `== ` pre-connect set (bit-for-bit).
-   This is the exact INT-Q4 window and MUST have a dedicated test.
-2. **R1 invisibility:** while `Δ_B` staged (mid-ConnectBlock), assert
-   `LitenyxIsSharedSpent(op)` returns the LIVE value (delta not visible) for a
-   staged-but-unpublished outpoint.
-3. **R2 publish-once:** successful `ConnectTip` ⇒ live set contains exactly `Δ_B`;
-   no double application on reorg re-entry.
-4. **Connect/disconnect symmetry:** connect B then disconnect B ⇒ live set restored
-   (publish then revert cancels), per `LITENYX_sharedstate.h:19–24`.
-5. **Within-block double spend:** two txs in B spending same outpoint ⇒ staged
-   reject at `StageSpend`, block invalid, live set untouched.
-6. **Batch/IBD:** connect N blocks via the step loop ⇒ N publishes, order preserved,
-   final set == fold of all N deltas.
+> **Scope boundary (verified this track):**
+> \[
+> \boxed{\text{M3 class-level KATs} \neq \text{daemon integration proof}}
+> \]
+> The class-level KAT (below) exercises the REAL `LitenyxCandidateSpendDelta`,
+> `LitenyxSpendPublishScope`, and `LitenyxSharedSpendSet` (no model, no mock) and
+> proves staging invisibility, default discard, explicit publication, idempotent
+> one-shot publication, within-candidate conflict handling, and connect/disconnect
+> symmetry. It does NOT execute the daemon `ConnectTip` control flow, so the
+> critical obligation
+> \[
+> ConnectTip(B)=Failure \Rightarrow SSS_{after}=SSS_{before}
+> \]
+> under a REAL failure AFTER a successful `ConnectBlock` (the INT-Q4 window) still
+> requires daemon-level integration coverage. See §4.2.
+
+### 4.1 Class-level KAT — DONE (`cpp_reference/test/test_litenyx_shared_delta.cpp`)
+
+Linked against the real `LITENYX_sharedstate.cpp` plus the minimum real dogecoin
+support TUs (`uint256.cpp`, `utilstrencodings.cpp` — `base_blob::SetHex`,
+`HexDigit`); Boost.Test header-only. Makefile rule added at `deploy/Makefile`
+(`KERRNYX_DELTA_SRC`/`KERRNYX_DOGE_SUPPORT`). Result: **6/6 pass**.
+
+1. **R1 invisibility** — staged-but-unpublished spend NOT visible to
+   `LitenyxIsSharedSpent` / live `IsSpent`.
+2. **R3 / SS-INV-4 (core INT-Q4 window)** — attempt that stages then exits WITHOUT
+   `PublishActive` leaves the live set bit-for-bit unchanged (including a
+   pre-existing live spend that must survive).
+3. **R2 publish-once** — explicit `PublishActive` applies the delta exactly once;
+   a second `PublishActive` is a no-op (no double-apply on reorg re-entry).
+4. **Connect/disconnect symmetry** — publish then `RevertSpend` restores the live
+   set (frozen canonical inverse unchanged).
+5. **Within-attempt + live-set double spend** — same outpoint staged twice, and a
+   live-set conflict, are both rejected; nothing extra staged.
+6. **Batch/IBD fold** — N sequential publishes ⇒ final set == fold of all N, order
+   preserved; an unstaged outpoint stays unspent.
+
+### 4.2 Daemon integration coverage — STILL OWED (not run in this track)
+
+Required before INT-OPEN-1 is classified `RESOLVED / VERIFIED`:
+
+- **G1 (the load-bearing one):** drive `ConnectTip(B)` to a real failure AFTER
+  `ConnectBlock` succeeds — specifically `FlushStateToDisk` failing at
+  `ConnectTip:2348` — and assert the live SSS equals the pre-connect state. The
+  class KAT proves the mechanism; the daemon test proves the verified attach points
+  behave in the actual control flow.
+- **G2:** P4/P5/P6 rejection mid-`ConnectBlock` must also leave the live set
+  unchanged (the scope destructor discards `Δ_B`); cover at least one topology /
+  lifecycle / execution rejection.
+- **G3:** a normal multi-block `ActivateBestChainStep` run publishes exactly one
+  delta per connected block and is reversible on a following reorg
+  (`DisconnectTip` → `LitenyxDisconnectSharedState`).
+
+These need a built `dogecoind` (production-build target) and the regtest harness;
+out of scope for the standalone KAT. INT-Q5 (pin the Makefile clone to v1.14.9)
+should land first so the daemon built is the structurally-verified one.
 
 All P4/P5/P6-scoped: the fix is orthogonal to topology/lifecycle/execution hooks and
 must not perturb their ConnectBlock ordering

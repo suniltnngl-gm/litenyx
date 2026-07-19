@@ -25,6 +25,15 @@ KERRNYX_EXEC_SRC = $(REPO_ROOT)/cpp_reference/test/test_litenyx_execution_author
 KERRNYX_EXEC_BIN = $(REPO_ROOT)/cpp_reference/test/test_litenyx_execution_authority
 KERRNYX_DRAIN_SRC = $(REPO_ROOT)/cpp_reference/test/test_litenyx_draining_authority.cpp
 KERRNYX_DRAIN_BIN = $(REPO_ROOT)/cpp_reference/test/test_litenyx_draining_authority
+KERRNYX_DELTA_SRC = $(REPO_ROOT)/cpp_reference/test/test_litenyx_shared_delta.cpp
+KERRNYX_DELTA_BIN = $(REPO_ROOT)/cpp_reference/test/test_litenyx_shared_delta
+
+# INT-OPEN-1 / M3 real-class KAT links the REAL LITENYX_sharedstate.cpp (which
+# depends on dogecoin uint256 / base_blob::SetHex) plus the minimum real dogecoin
+# support translation units. These are NOT models/mocks — they are the vendored
+# tree's own code, pulled in only as far as needed to resolve symbols.
+KERRNYX_DOGE_SUPPORT = $(DOGECOIN_DIR)/src/uint256.cpp \
+                        $(DOGECOIN_DIR)/src/utilstrencodings.cpp
 
 .PHONY: help cpp-test cpp-compile-check detect-env clone-dogecoin inject-hooks production-build regtest-test
 
@@ -126,6 +135,12 @@ cpp-test:
 		-lpthread $(BOOST_TEST) && \
 		echo "Running Litenyx draining authority unit test (Phase 7)..." && \
 		$(KERRNYX_DRAIN_BIN)
+	@echo "Compiling Litenyx shared-delta unit test (INT-OPEN-1 / M3)..."
+	$(CXX) -std=c++20 -O0 -DKERRNYX_STANDALONE_TEST \
+		$(KERRNYX_INCLUDES) $(KERRNYX_DELTA_SRC) $(KERRNYX_DOGE_SUPPORT) -o $(KERRNYX_DELTA_BIN) \
+		-lpthread $(BOOST_TEST) && \
+		echo "Running Litenyx shared-delta unit test (INT-OPEN-1 / M3)..." && \
+		$(KERRNYX_DELTA_BIN)
 
 cpp-compile-check:
 	@echo "Litenyx consensus is header-only integer math; no float check required."
