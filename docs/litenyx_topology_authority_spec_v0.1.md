@@ -220,13 +220,98 @@ Phase 3 used `M_c = (block has ≥1 non-coinbase tx) ? 50 : 0` in `validation.cp
 
 | Candidate | Committed? | Assessment |
 |-----------|-----------|------------|
-| **Block occupancy / weight** | yes | *Preferred candidate.* Represents consumed execution capacity; directly maps to "demand pressure." `M_b = clamp(floor(100 * blockWeight / MAX_BLOCK_WEIGHT), 0, 100)`. |
+| **Block occupancy / weight** | yes | *SELECTED — see §5.5 for the FROZEN `D_v1`.* Represents consumed execution capacity; directly maps to "demand pressure." Illustrative form: `floor(SCALE * GetBlockWeight / MAX_BLOCK_WEIGHT)`. |
 | Transaction count | yes | Deterministic but treats one tiny tx like one maximum-cost tx; poor demand fidelity. Rejected as primary. |
 | Fee totals / fee density | yes | Committed, but measures *market conditions* as much as demand; conflates price with load. NOT the primary signal (may be a FUTURE secondary/telemetry input only). |
 
 **Provisional lead:** block occupancy/weight (satisfies I1–I5 and best models
 capacity). It is NOT locked in v0.1; the final `D` is selected, justified, and
 version-pinned in a spec revision **before** `H_topology`.
+
+### 5.5 Canonical Demand Function — `D_v1` (FROZEN)
+
+**Canonical Demand Function Version 1: normalized consensus block-weight
+occupancy, represented using bounded fixed-point integer arithmetic.**
+
+`D_v1` is the pinned production formula selected per §13 step 2. It is stateless
+(a pure function of one block) and satisfies invariants (I1)–(I5).
+
+#### 5.5.1 The four pinned items
+
+**(1) Exact canonical weight function.**
+`D_v1` MUST call the SAME consensus weight computation the underlying chain
+already enforces — Dogecoin's `GetBlockWeight(const CBlock&)`
+(`src/primitives/block.h`), checked against `MAX_BLOCK_WEIGHT` in `ConnectBlock`
+(`ContextualCheckBlock`, `GetBlockWeight(block) > MAX_BLOCK_WEIGHT`). NO
+topology-specific reinterpretation of block size/weight is permitted. The bound
+is the consensus constant `MAX_BLOCK_WEIGHT = 4000000` (`src/consensus/consensus.h`).
+
+**(2) `DEMAND_SCALE`.**
+```
+DEMAND_SCALE = 10000        // fixed-point, 0..10000 == 0.00%..100.00%
+```
+`M_b ∈ [0, DEMAND_SCALE]`. (This SUPERSEDES the earlier 0..100 controller range;
+see §5.5.4 for the controller-scaling reconciliation.)
+
+**(3) Rounding behavior.**
+Truncation toward zero (integer floor), integer-only, no floating point:
+```
+D_v1(block) = floor( GetBlockWeight(block) * DEMAND_SCALE / MAX_BLOCK_WEIGHT )
+```
+Evaluated as 64-bit integer arithmetic. `GetBlockWeight(block)` is
+`0 <= w <= MAX_BLOCK_WEIGHT` for any valid connected block, so
+`D_v1 ∈ [0, DEMAND_SCALE]` with no clamp required; a defensive
+`clamp(_, 0, DEMAND_SCALE)` is nonetheless applied to tolerate future
+constant changes. Intermediate product `w * DEMAND_SCALE` fits int64
+(`4e6 * 1e4 = 4e10 << 2^63`).
+
+**(4) Activation / version semantics.**
+`D_v1` is bound to `TopologyState.nVersion == 1` (§3). Changing the demand
+formula REQUIRES a new `nVersion` and a new activation height (§8). Under staged
+activation: pre-derivation uses no demand; the soft and hard regimes both use
+`D_v1` for `nVersion == 1`.
+
+#### 5.5.2 Excluded inputs (NORMATIVE)
+
+`D_v1` MUST NOT incorporate: fees, mempool backlog, wall-clock/latency, peer
+observations, local CPU/disk pressure, or hash rate. These MAY feed the
+observational planner (`LitenyxTopologyTracker`) but can NEVER influence
+authoritative topology unless independently committed and consensus-defined in a
+future version.
+
+#### 5.5.3 "Accepted demand" caveat (documented, accepted for v1)
+
+Block occupancy measures **accepted** demand, not total demand: a full block
+signals sustained pressure but cannot distinguish "slightly oversubscribed" from
+"100× oversubscribed" (the excess lives in uncommitted mempool, which is
+correctly excluded). This is ACCEPTABLE for v1 because topology transitions
+respond to *sustained saturation over a window* (hysteresis + cooldown), not to
+instantaneous or uncommitted demand.
+
+#### 5.5.4 Three separate concepts (LOCKED separation)
+
+```text
+D_v1(block)   per-block demand function     stateless, 0..DEMAND_SCALE
+     ↓
+M_c           canonical aggregation over committed samples in the window
+     ↓
+T_h           resulting authoritative topology
+```
+
+`D_v1` is stateless. Windowing/aggregation into `M_c` is a SEPARATE consensus
+concept (the deterministic window of §5.1), and `T_h` derivation is a third.
+This separation is what makes future versioning safe: a new demand formula
+changes only `D`, not the aggregation or the transition machinery.
+
+**Controller-scaling reconciliation.** The Phase-3 controller
+(`LITENYX_topology.h`) operates on a 0..100 `M_c` with `HYST_LOW=20`,
+`HYST_HIGH=80`. `D_v1` produces 0..`DEMAND_SCALE` (0..10000). The canonical
+aggregation MUST map the committed samples onto the controller's input domain
+deterministically (integer-only). The exact mapping (rescale vs. widen the
+hysteresis band to the `DEMAND_SCALE` domain) is fixed in the next
+implementation commit alongside `CalculateExpectedTopology`, and MUST be
+integer-only and version-pinned. No controller math changes; only the input
+scaling is defined.
 
 ---
 
@@ -367,11 +452,13 @@ Phase 5+
 
 1. **This commit — documentation only.** No code changes; `ConnectBlock`
    untouched. Establishes the spec and the `M_c` interface/invariants.
-2. **Select canonical `D`.** Spec revision picks + justifies the production
-   demand formula (lead: block occupancy/weight), version-pins it (§3
-   `nVersion`), and sets `H_derive`/`H_topology`.
+2. **Select canonical `D`. — DONE (§5.5).** `D_v1` FROZEN as normalized
+   consensus block-weight occupancy (`GetBlockWeight`/`MAX_BLOCK_WEIGHT`,
+   `DEMAND_SCALE=10000`, floor rounding, pinned to `nVersion=1`). Still TODO
+   within this step before the hook: set concrete `H_derive`/`H_topology`.
 3. **Pure consensus function — no `ConnectBlock` hook.** Introduce
-   `CalculateExpectedTopology` + `TopologyState` serialization/hash as pure,
+   `CalculateExpectedTopology` + `TopologyState` serialization/hash + the
+   integer-only `D_v1`→`M_c` aggregation/scaling (§5.5.4) as pure,
    standalone-testable code. Land replay-equivalence and path-independence tests
    (§10.1, §10.7) FIRST.
 4. **Add authoritative validation hook.** Only after (3) is green, wire
