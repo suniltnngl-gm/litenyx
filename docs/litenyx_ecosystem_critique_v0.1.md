@@ -1549,3 +1549,192 @@ ConnectBlock -> SharedState -> TopologyAuthority -> LifecycleAuthority ->
 ExecutionAuthority -> RemainingValidation; rejection atomicity, ordering, disconnect
 symmetry, activation boundaries, fail-closed reconstruction, intentional Phase-7
 hook absence).
+
+# Component 11 — Daemon Integration
+
+**Central question:** Does daemon integration preserve every component's frozen
+authority boundary, with correct ordering, atomic failure, reorg symmetry, and no
+bypass path?
+
+**Verdict:**
+
+```
+Ordering: CORRECT | Reorg symmetry: CORRECT | Fail-closed: CORRECT | Bypass: NONE
+Cross-phase rejection atomicity: GAP (INT-OPEN-1) | P7 production enforcement: NOT YET INTEGRATED (by design)
+```
+
+The composition is sound on five of six surfaces. The exception is a real
+cross-phase atomicity gap in which `SharedSpendSet` mutates BEFORE a later
+Litenyx check rejects, WITHOUT an explicit rollback on that failure path. This is
+an integration finding linking Components 1/9/10 — NOT a reason to reopen
+P4/P5/P6, whose pure engines remain correct.
+
+## Surface 1 — ConnectBlock ordering (executable sequence)
+
+Actual order (`deploy/patches/litenyx-validation.patch:43-111`), matching spec
+`topology_authority_spec:502-514`:
+
+```
+1. LitenyxCheckAuxHeader           -> return false on failure
+2. LitenyxConnectSharedState       -> COMMITS spends into the global set; false on double-spend
+3. LitenyxCheckTopologyCommitment  -> return false on Invalid   [runs AFTER spends committed]
+4. LitenyxCheckLifecycleCommitment -> return false on Invalid   [runs AFTER spends committed]
+5. LitenyxCheckExecutionAuthority  -> return false on Hard non-Ok [runs AFTER spends committed]
+6. TopologyTracker Observe/Tick    -> try/catch contained (advisory, non-consensus)
+```
+
+Layering is correct: each authority check runs STRICTLY AFTER its upstream truth
+is authoritative (P4 before P5 before P6), closing the "omit the downstream field
+to route around the upstream check" bypass (spec §6.2 / §9.1). Consensus-critical
+steps 2-5 are OUTSIDE any try/catch; only the advisory tracker (6) is contained.
+
+**But step 2 mutates before steps 3-5 can reject.** `LitenyxConnectSharedState`
+records spends into the process-global singleton (`LITENYX_validation.cpp:68-74`)
+and returns true; a subsequent Invalid at step 3/4/5 does `return false` with NO
+`LitenyxDisconnectSharedState` on that path. See Surface 4.
+
+## Surface 2 — Disconnect symmetry
+
+Correctly asymmetric BY DESIGN:
+
+- **SharedSpendSet** requires explicit undo: `DisconnectBlock` calls
+  `LitenyxDisconnectSharedState` (`litenyx-validation.patch:20`), which
+  `RevertSpend`s exactly this block's inputs (`LITENYX_validation.cpp:78-88`) —
+  the mirror of `ConnectSharedState`.
+- **P4/P5/P6** require NO component-specific undo: they reconstruct from the
+  canonical prefix, so a reorg re-derives the correct state automatically
+  (`validation.h:56,80,110`; Component 9). Confirmed consistent.
+
+This symmetry is correct for the NORMAL reorg path (a block that DID connect, then
+gets disconnected). It does NOT cover the FAILED-connect path (Surface 4).
+
+## Surface 3 — Activation composition
+
+Regime ordering holds: each phase selects its own frozen per-network activation
+and derives its regime independently; enforcement runs in dependency order
+(P4->P5->P6). No downstream authority is enforced before its upstream truth is
+authoritative. Phase 7 is explicitly OUTSIDE this production sequence (Surface 6).
+Main is DISABLED for all phases (frozen facts), so HardAuthority composition is
+exercised on regtest/test only.
+
+## Surface 4 — Failure atomicity (the high-value finding)
+
+Target property:
+
+```
+ConnectBlock Reject  =>  No persistent/ephemeral consensus-relevant mutation
+                         (or: deterministic rollback of any earlier mutation)
+```
+
+- **Phase-2 self-atomicity: HOLDS.** `LitenyxConnectSharedState` is
+  check-ALL-then-commit-ALL (`LITENYX_validation.cpp:56-75`): if Phase 2 itself
+  rejects, it committed nothing. (Already recorded as Component-1 "what is
+  proven".)
+- **Cross-phase atomicity: GAP.** Once Phase 2 returns true, the spends ARE in the
+  singleton. If step 3/4/5 then returns false, the ConnectBlock hunk performs NO
+  `RevertSpend`. Rollback would only occur if the daemon calls `DisconnectBlock`
+  for the failed block — but in the Bitcoin/Dogecoin lineage a block whose
+  `ConnectBlock` returns false is marked invalid and its `CCoinsViewCache` is
+  DISCARDED (never flushed); `DisconnectBlock` is NOT called for a block that never
+  successfully connected. Critically, `LitenyxSharedSpendSet` is a SEPARATE
+  process-global singleton, NOT part of the discarded CoinsView cache, so its
+  leaked spends survive the failure.
+
+**Consequence (LOCAL, not global-consensus):**
+
+```
+ConnectSharedState commit  ->  later Litenyx reject  ->  leaked spends persist in singleton
+```
+
+A block that passes Phase 2 but fails P4/P5/P6 leaves its inputs marked globally
+spent. A later valid block spending those same outpoints could then be wrongly
+rejected as a cross-chain double spend, until the singleton is repaired (restart /
+reindex rebuild — itself OPEN, PR-OPEN-1). This is the same LOCAL consensus-state
+integrity surface as the RPC mutators (Component 10), reached here via the
+internal pipeline rather than RPC. It does NOT change global protocol rules and
+does NOT reopen P4/P5/P6.
+
+Severity note: reachability depends on a block that is Phase-2-valid yet
+P4/P5/P6-invalid at an ACTIVE (Hard) regime. Main is DISABLED, so this is
+currently a regtest/test-regime exposure — but it is a genuine composition defect,
+not a comment-level concern.
+
+## Surface 5 — Fail-closed reconstruction
+
+Correct. When reconstruction inputs are unavailable (pruned/unreadable body),
+`LitenyxBuildCanonicalBlocks` returns false (`LITENYX_validation.cpp:116-118`) and
+the hooks fail CLOSED with distinct reasons (`:159,224,287`) — they never fall
+back to tracker state, RPC-mutated state, the asserted commitment, defaults, or a
+weaker authority. Verified across P4/P5/P6. (Pruning support itself remains a
+pre-mainnet requirement; main is DISABLED.)
+
+## Surface 6 — Bypass-path reconnaissance
+
+Clean. Every production call site of the Litenyx hooks was enumerated
+(grep across the repo): the five enforcement hooks appear ONLY inside the single
+`ConnectBlock` hunk, and `LitenyxDisconnectSharedState` ONLY inside the
+`DisconnectBlock` hunk. No alternate validation/import/reindex path invokes them
+separately — reindex/IBD/import all funnel through `ConnectBlock`, so they
+traverse the same enforcement composition. No second, weaker path exists.
+
+## Phase-7 status (NOT a defect)
+
+```
+P7 PureEngine = PROVEN  |  P7 ProductionEnforcement = NOT YET ACTIVATED/INTEGRATED
+```
+
+Consistent with the frozen `770496e` boundary and DA-OPEN-1: there is
+deliberately no Phase-7 ConnectBlock hook. Recorded as designed-incomplete, not a
+composition gap.
+
+## OPEN question
+
+### INT-OPEN-1 (cross-phase rejection atomicity)
+> What mechanism guarantees that a block committing `SharedSpendSet` spends in
+> step 2 but rejected by a later Litenyx check (step 3/4/5) leaves NO leaked spends
+> in the singleton — e.g. (a) reorder so `ConnectSharedState` runs LAST among the
+> Litenyx checks, (b) a scoped commit that is rolled back on any subsequent
+> `return false`, or (c) make the spend-set part of the discarded CoinsView batch
+> rather than a standalone singleton?
+
+**No-go constraints:**
+- **INT-NOGO-1** — the fix MUST preserve Phase-2 self-atomicity and reorg
+  reversibility (does not regress `RevertSpend` symmetry; extends PR-NOGO-1).
+- **INT-NOGO-2** — the fix MUST NOT weaken the P4->P5->P6 ordering or the
+  fail-closed / no-bypass properties (Surfaces 1/5/6).
+- **INT-NOGO-3** — do NOT solve it by wrapping consensus-critical steps in
+  try/catch (steps 2-5 must stay outside try/catch).
+
+## Guardrails (doctrine-level)
+
+- **G-INT-1** — any Litenyx state mutation inside `ConnectBlock` is either the LAST
+  consensus-critical step or is transactionally rolled back on any later
+  `return false`.
+- **G-INT-2** — enforcement ordering (P4->P5->P6, each after its upstream truth)
+  is invariant; new phases insert in dependency order.
+- **G-INT-3** — every enforcement hook remains reachable from exactly one
+  production path (`ConnectBlock`); no second/weaker validation path is introduced.
+- **G-INT-4** — Phase-7 production integration, when it comes, is added at the
+  frozen ordering position AFTER P6 and gets its own atomicity/rollback review
+  (ties DA-OPEN-1, G-DA-*).
+
+## Disposition
+
+```
+Ordering CORRECT | Reorg symmetry CORRECT | Fail-closed CORRECT | Bypass NONE | Cross-phase atomicity GAP (INT-OPEN-1) | P7 NOT YET INTEGRATED
+```
+
+Daemon integration composes the individually-correct engines with correct
+dependency ordering, correct reorg symmetry for connected blocks, fail-closed
+reconstruction, and a single unbypassed enforcement path. The one real defect is
+cross-phase rejection atomicity: `SharedSpendSet` commits before P4/P5/P6 can
+reject, with no rollback on the failed-connect path, producing a LOCAL
+consensus-state integrity exposure that links Components 1/9/10 (recorded as
+INT-OPEN-1, currently regtest/test-regime given main DISABLED). Phase-7 production
+enforcement is intentionally not integrated (frozen `770496e` / DA-OPEN-1), not a
+defect. Recorded: INT-OPEN-1, INT-NOGO-1..3, G-INT-1..4. No frozen invariant
+reopened; P4/P5/P6 pure engines untouched.
+
+Live OPEN design boundaries now carried forward: SSC-OPEN-1 (== PR-OPEN-1),
+DA-OPEN-1, XCT-OPEN-1, XCT-OPEN-2, ATMP-OPEN-1, ATMP-OPEN-2, RPC-OPEN-1, RPC-OPEN-2,
+INT-OPEN-1. This completes the outward ecosystem traversal (Components 1-11).
