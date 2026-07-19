@@ -10,6 +10,12 @@ DOGECOIN_DIR ?= $(CURDIR)/external/dogecoin
 CXX ?= g++
 BOOST_TEST ?= -lboost_unit_test_framework
 
+# INT-Q5 (pin): the M3 attach points (ConnectTip failure boundary) were VERIFIED
+# against Dogecoin v1.14.9. Pin the base to the EXACT commit so the daemon built
+# for G1-G3 integration is structurally identical to the designed source. A moving
+# `master` would invalidate the INT-Q4 boundary analysis, so this is a hard pin.
+DOGECOIN_PIN ?= e0a1c157791544e818c901bd9341896965afbf9d  # Dogecoin Core v1.14.9
+
 KERRNYX_INCLUDES = -I$(REPO_ROOT) -I$(REPO_ROOT)/cpp_reference -I$(DOGECOIN_DIR)/src
 KERRNYX_TEST_SRC = $(REPO_ROOT)/cpp_reference/test/test_litenyx.cpp
 KERRNYX_TEST_BIN = $(REPO_ROOT)/cpp_reference/test/test_litenyx
@@ -47,11 +53,16 @@ help:
 
 clone-dogecoin:
 	@if [ -d "$(DOGECOIN_DIR)/.git" ]; then \
-		echo "Dogecoin clone already present."; \
+		echo "Dogecoin clone already present; verifying INT-Q5 pin..."; \
+		cd $(DOGECOIN_DIR) && git fetch --tags --depth 1 origin $(DOGECOIN_PIN); \
+		git -C $(DOGECOIN_DIR) checkout -q $(DOGECOIN_PIN) || git -C $(DOGECOIN_DIR) checkout -q tags/v1.14.9; \
 	else \
-		echo "Cloning Dogecoin..."; \
-		git clone --depth 1 https://github.com/dogecoin/dogecoin.git $(DOGECOIN_DIR); \
+		echo "Cloning Dogecoin (pinned INT-Q5: $(DOGECOIN_PIN))..."; \
+		git clone --filter=blob:none --no-checkout https://github.com/dogecoin/dogecoin.git $(DOGECOIN_DIR); \
+		git -C $(DOGECOIN_DIR) fetch --depth 1 origin $(DOGECOIN_PIN); \
+		git -C $(DOGECOIN_DIR) checkout -q $(DOGECOIN_PIN); \
 	fi
+	@echo "Verified Dogecoin base at: $$(git -C $(DOGECOIN_DIR) rev-parse HEAD) (expect $(DOGECOIN_PIN))"
 
 inject-hooks: clone-dogecoin
 	@echo "Copying litenyx/ consensus sources into the clone..."

@@ -139,12 +139,26 @@ All these funnel through `ActivateBestChainStep`'s per-block `ConnectTip` loop
 (2469). Because stage+publish is bound to a single `ConnectTip`, batch connection
 gets one stage/publish cycle per block automatically. No path-specific code.
 
-### 3.7 Makefile pin (INT-Q5) — prerequisite
+### 3.7 Makefile pin (INT-Q5) — DONE
 
-Before building against these attach points, pin `deploy/Makefile:44` from unpinned
-`master --depth 1` to `--branch v1.14.9` (or a fixed commit) so the built
-`ConnectTip` is the verified 2313–2361 structure. This is a build-hygiene edit, not
-an M3 design change.
+Pinned. `deploy/Makefile` `clone-dogecoin` now checks out the exact commit
+`e0a1c157791544e818c901bd9341896965afbf9d` (Dogecoin Core **v1.14.9**) via
+`DOGECOIN_PIN` (overridable). Verified this track:
+
+- fresh clone + `git fetch --depth 1 origin <pin>` + checkout ⇒
+  `HEAD = e0a1c157791544e818c901bd9341896965afbf9d` (exact match);
+- patch `git apply --check` against the pinned tree ⇒ 5/5 hunks apply
+  (`src/validation.cpp` `ConnectTip` 2313–2361 structure intact);
+- 6/6 delta KATs (`KERRNYX_DOGE_SUPPORT`) re-run against the pinned tree's
+  `uint256.cpp` / `utilstrencodings.cpp` ⇒ pass.
+
+**M3 verified integration substrate (record):**
+\[
+\boxed{\text{Dogecoin Core v1.14.9, commit } e0a1c157791544e818c901bd9341896965afbf9d}
+\]
+This is the tree G1–G3 daemon integration MUST build against, so the
+`ConnectTip` failure boundary under test equals the one M3 was designed against
+(INT-Q4). An unpinned `master` would NOT be an authoritative substrate.
 
 ---
 

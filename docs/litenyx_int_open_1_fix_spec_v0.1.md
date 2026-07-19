@@ -248,9 +248,10 @@ governed by PR-OPEN-1 / SS-INV-6/7 (§4.6).
 
 > Verification source: `github.com/dogecoin/dogecoin` tag **v1.14.9**,
 > `src/validation.cpp`, `ConnectTip` (lines 2313–2361) and `ActivateBestChainStep`
-> (lines 2440–2509). The production Makefile clones `master --depth 1` unpinned
-> (`deploy/Makefile:44`); see INT-Q5 (new) — a pin is REQUIRED before implementation.
-> The `ConnectTip` structure below is stable across the 1.14 lineage.
+> (lines 2440–2509). The production Makefile now pins the exact commit
+> `e0a1c157791544e818c901bd9341896965afbf9d` (Dogecoin Core v1.14.9) via
+> `DOGECOIN_PIN` (INT-Q5 RESOLVED); the `ConnectTip` structure below is the one
+> the daemon G1–G3 integration builds against.
 
 ### INT-Q4 (load-bearing) — RESOLVED: last failure-capable step = `FlushStateToDisk`
 
@@ -310,13 +311,15 @@ discard on every `return false`/early exit before that tail (INT-Q2).
   a *staging* writer is acceptable only if it targets `Δ_B`, never the live set,
   pre-publish.
 
-### INT-Q5 (NEW — prerequisite finding): pin the vendored daemon version
+### INT-Q5 (RESOLVED — pin the vendored daemon version)
 
-`deploy/Makefile:44` clones `master --depth 1` with NO tag/commit pin, so the tree
-the hooks compile against is a MOVING target. INT-Q1–Q4 above are verified against
-**v1.14.9**. Before implementation, the build MUST pin a specific tag/commit (e.g.
-`--branch v1.14.9`) so the verified `ConnectTip` structure is the one actually built.
-This is an implementation-track prerequisite, not a design change to M3.
+`deploy/Makefile` `clone-dogecoin` previously cloned `master --depth 1` with NO
+tag/commit pin, a MOVING target. INT-Q1–Q4 above are verified against **v1.14.9**.
+The build now pins the exact commit via `DOGECOIN_PIN`:
+**`e0a1c157791544e818c901bd9341896965afbf9d`** (Dogecoin Core v1.14.9). Verified:
+fresh clone + fetch + checkout ⇒ HEAD matches exactly; patch `git apply --check`
+against the pinned tree ⇒ 5/5 hunks apply; 6/6 delta KATs pass against the pinned
+tree. This is the authoritative M3 integration substrate for G1–G3 daemon tests.
 
 ## 8. Disposition
 
@@ -338,8 +341,8 @@ by recovery re-deriving the canonical fold, not by this fix.
 last failure-capable step is `FlushStateToDisk(state, FLUSH_STATE_IF_NEEDED)` at line
 2348; `view.Flush()` (2342) is assert-guarded, not graceful-failure-capable. The
 legitimate SSS publish point is the non-failure-capable tail (post-2348, at/after
-`UpdateTip`). INT-Q1/Q2/Q3 also resolved against the same tree; INT-Q5 (new) requires
-pinning the currently-unpinned `master` clone (`deploy/Makefile:44`) to v1.14.9 before
+`UpdateTip`). INT-Q1/Q2/Q3 also resolved against the same tree; INT-Q5 is RESOLVED —
+the `master` clone is now pinned to v1.14.9 (`e0a1c157…`) via `DOGECOIN_PIN` before
 implementation. No Phase-2 code written; no invariant reopened; M3 R1–R3 unchanged.
 
 Implementation-track status: INT-OPEN-1 = SPECIFIED / IMPLEMENTATION-PENDING with the
