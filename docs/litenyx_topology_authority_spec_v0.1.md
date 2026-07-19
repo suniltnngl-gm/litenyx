@@ -399,21 +399,67 @@ on the observational tracker.
 
 ---
 
-## 8. Activation boundary `H_topology`
+## 8. Activation semantics (FROZEN — per-network, height-indexed)
 
 Staged activation (per Phase-4 decision) de-risks by proving network-wide
-determinism before enforcement:
+determinism before enforcement. Two per-network heights gate three regimes:
 
-| Regime | Height range | Commitment | Validation |
-|--------|--------------|-----------|------------|
-| Pre-derivation | `h < H_derive` | absent | none; `T_h = T_0` fixed |
-| Soft / advisory | `H_derive <= h < H_topology` | present, computed + logged | mismatch WARNED, NOT rejected |
-| Hard / authoritative | `h >= H_topology` | MANDATORY | mismatch → `return false` |
+| Regime | Height range | Commitment | Derivation | Validation |
+|--------|--------------|-----------|-----------|------------|
+| Pre-derivation | `h < H_derive` | absent | none; `T_h = T_0` fixed | legacy behavior |
+| Soft / advisory | `H_derive <= h < H_topology` | present, computed + logged | authoritative `T_h` derived + indexed | mismatch WARNED, NOT rejected |
+| Hard / authoritative | `h >= H_topology` | MANDATORY | authoritative `T_h` derived + indexed | mismatch/missing → `return false` |
 
-- Regtest/CI SHALL set `H_derive`/`H_topology` low (early heights) so the gate is
-  exercised deterministically.
-- The soft window lets multiple nodes confirm identical `TopologyStateHash`
-  before enforcement flips on.
+### 8.1 Per-network parameters (FROZEN scheme; values pinnable per network)
+
+Activation is a **per-network consensus parameter**, carried in
+`Consensus::Params` (NOT a compile-time global), exactly as other soft/hard forks
+are. Two fields:
+
+```text
+consensus.nLitenyxTopoDeriveHeight    // H_derive
+consensus.nLitenyxTopoTopologyHeight  // H_topology
+```
+
+Semantics (NORMATIVE):
+
+- **Disabled state (explicit).** A network is DISABLED when
+  `H_derive == LITENYX_TOPO_ACTIVATION_DISABLED`. When disabled, ALL heights are
+  Pre-derivation: no derivation, no commitment, legacy behavior — the authority
+  engine is dormant. `LITENYX_TOPO_ACTIVATION_DISABLED` is a NAMED sentinel
+  meaning "never," NOT a large-but-reachable height. Implementations MUST test
+  `== DISABLED`, never `h >= someHugeNumber`.
+- **Mainnet = DISABLED in Phase 4.** Mainnet ships with BOTH heights set to
+  `LITENYX_TOPO_ACTIVATION_DISABLED`. Enabling mainnet is a DELIBERATE, separate
+  release decision (a future spec revision + params change), never an accidental
+  side effect of a placeholder height becoming reachable.
+- **Ordering invariant.** When enabled, `0 < H_derive <= H_topology`. A network
+  MUST NOT set `H_topology` without `H_derive`. `H_derive == H_topology` is
+  permitted (no soft window) but discouraged outside tests.
+- **Both-disabled coupling.** If `H_derive == DISABLED` then `H_topology` MUST
+  also be `DISABLED` (no hard enforcement without derivation). Validated at
+  params construction.
+
+### 8.2 Concrete per-network values (FROZEN for Phase 4)
+
+| Network | `H_derive` | `H_topology` | Rationale |
+|---------|-----------|--------------|-----------|
+| **regtest** | `100` | `300` | Low, deterministic; exercises all three regimes + both boundaries fast in CI. Aligns to `OBS_WINDOW=100` boundaries; `H_topology - H_derive = 200 = COOLDOWN`. |
+| **testnet** | `500` | `1500` | Enabled early on a throwaway network for multi-node soft-window confirmation before any mainnet consideration. |
+| **mainnet** | `DISABLED` | `DISABLED` | Explicitly OFF in Phase 4; enabled only by a future deliberate release. |
+
+`LITENYX_TOPO_ACTIVATION_DISABLED` is defined in `LITENYX_types.h` /
+`LITENYX_topology_authority.h`. Regtest values are chosen so replay/reorg tests
+can cross `H_derive-1/H_derive` and `H_topology-1/H_topology` cheaply.
+
+### 8.3 Notes
+
+- The soft window (`H_derive..H_topology`) lets multiple nodes confirm identical
+  `TopologyStateHash` before enforcement flips on.
+- Activation heights are **deployment policy** around the (already-proven) pure
+  mechanism; they do NOT alter `D_v1`/`M_c_v1`/`F`. Changing the *mechanism*
+  requires a `nVersion` bump (§3, §5.5); changing *when it enforces* requires
+  only new per-network heights.
 
 ---
 
@@ -497,8 +543,9 @@ Phase 5+
    untouched. Establishes the spec and the `M_c` interface/invariants.
 2. **Select canonical `D`. — DONE (§5.5).** `D_v1` FROZEN as normalized
    consensus block-weight occupancy (`GetBlockWeight`/`MAX_BLOCK_WEIGHT`,
-   `DEMAND_SCALE=10000`, floor rounding, pinned to `nVersion=1`). Still TODO
-   within this step before the hook: set concrete `H_derive`/`H_topology`.
+   `DEMAND_SCALE=10000`, floor rounding, pinned to `nVersion=1`).
+   Activation semantics FROZEN (§8): per-network `H_derive`/`H_topology`,
+   regtest `100/300`, testnet `500/1500`, mainnet DISABLED sentinel.
 3. **Pure consensus function — no `ConnectBlock` hook.** Implement, as pure
    standalone-testable code, the now-FROZEN chain: `D_v1` (§5.5), `M_c_v1`
    full-precision aggregation + single controller-boundary downscale (§5.5.5),

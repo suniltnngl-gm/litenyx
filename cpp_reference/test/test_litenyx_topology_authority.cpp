@@ -312,4 +312,40 @@ BOOST_AUTO_TEST_CASE(sha256d_known_answers)
         "4f8b42c22dd3729b519ba6f68d2da7cc5b2d606d05daed5ad5128cc03e6c6358");
 }
 
+// A10: activation semantics (spec §8) — regimes, disabled sentinel, validity.
+BOOST_AUTO_TEST_CASE(activation_regimes_and_disabled)
+{
+    // Regtest: H_derive=100, H_topology=300.
+    LitenyxTopoActivation rt = LitenyxTopoActivationRegtest();
+    BOOST_CHECK(rt.IsValid());
+    BOOST_CHECK(!rt.IsDisabled());
+    BOOST_CHECK_EQUAL((int)rt.RegimeAt(99),  (int)LitenyxTopoRegime::PreDerivation);
+    BOOST_CHECK_EQUAL((int)rt.RegimeAt(100), (int)LitenyxTopoRegime::SoftAdvisory);   // H_derive: enters soft
+    BOOST_CHECK_EQUAL((int)rt.RegimeAt(299), (int)LitenyxTopoRegime::SoftAdvisory);
+    BOOST_CHECK_EQUAL((int)rt.RegimeAt(300), (int)LitenyxTopoRegime::HardAuthority);  // H_topology: enters hard
+    BOOST_CHECK_EQUAL((int)rt.RegimeAt(5000),(int)LitenyxTopoRegime::HardAuthority);
+
+    // Testnet enabled early.
+    LitenyxTopoActivation tn = LitenyxTopoActivationTestnet();
+    BOOST_CHECK(tn.IsValid());
+    BOOST_CHECK(!tn.IsDisabled());
+    BOOST_CHECK_EQUAL((int)tn.RegimeAt(499),  (int)LitenyxTopoRegime::PreDerivation);
+    BOOST_CHECK_EQUAL((int)tn.RegimeAt(1500), (int)LitenyxTopoRegime::HardAuthority);
+
+    // Mainnet DISABLED: every height is Pre-derivation; never reaches hard.
+    LitenyxTopoActivation mn = LitenyxTopoActivationMainnet();
+    BOOST_CHECK(mn.IsValid());       // both-disabled is a VALID configuration
+    BOOST_CHECK(mn.IsDisabled());
+    BOOST_CHECK_EQUAL((int)mn.RegimeAt(0),          (int)LitenyxTopoRegime::PreDerivation);
+    BOOST_CHECK_EQUAL((int)mn.RegimeAt(0xFFFFFFFEu),(int)LitenyxTopoRegime::PreDerivation);
+    // The sentinel is "never", not a reachable height.
+    BOOST_CHECK_EQUAL(mn.hDerive, LITENYX_TOPO_ACTIVATION_DISABLED);
+
+    // Structural invalidity: ordering, zero, and the both-disabled coupling.
+    BOOST_CHECK(!(LitenyxTopoActivation{300, 100}).IsValid());  // H_topology < H_derive
+    BOOST_CHECK(!(LitenyxTopoActivation{0, 100}).IsValid());    // H_derive == 0
+    BOOST_CHECK(!(LitenyxTopoActivation{LITENYX_TOPO_ACTIVATION_DISABLED, 100}).IsValid()); // derive disabled but topology set
+    BOOST_CHECK((LitenyxTopoActivation{100, 100}).IsValid());   // no soft window is allowed
+}
+
 BOOST_AUTO_TEST_SUITE_END()

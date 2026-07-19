@@ -48,6 +48,50 @@ static const int64_t LITENYX_CONTROLLER_DOWNSCALE = LITENYX_DEMAND_SCALE / 100;
 // D_v1 / M_c_v1 / the downscale REQUIRES a new nVersion + activation height.
 static const uint32_t LITENYX_TOPOLOGY_STATE_VERSION = 1;
 
+// ---- Activation semantics (spec §8, FROZEN scheme) -------------------------
+// Named "never" sentinel. A network with H_derive == DISABLED is dormant: the
+// authority engine never derives/enforces. This is NOT a large-but-reachable
+// height; callers MUST test == DISABLED, never h >= someHugeNumber.
+static const uint32_t LITENYX_TOPO_ACTIVATION_DISABLED = 0xFFFFFFFFu;
+
+// The three activation regimes (spec §8).
+enum class LitenyxTopoRegime {
+    PreDerivation = 0, // h < H_derive (or disabled): legacy, no derivation
+    SoftAdvisory  = 1, // H_derive <= h < H_topology: derive + index, warn-only
+    HardAuthority = 2, // h >= H_topology: derive + index, fail-closed
+};
+
+// Per-network activation heights (mirrors Consensus::Params in the daemon; kept
+// here as a pure struct so the engine + proofs share one definition).
+struct LitenyxTopoActivation {
+    uint32_t hDerive   = LITENYX_TOPO_ACTIVATION_DISABLED;
+    uint32_t hTopology = LITENYX_TOPO_ACTIVATION_DISABLED;
+
+    bool IsDisabled() const { return hDerive == LITENYX_TOPO_ACTIVATION_DISABLED; }
+
+    // Structural validity (spec §8.1). Enforced at params construction.
+    bool IsValid() const {
+        if (hDerive == LITENYX_TOPO_ACTIVATION_DISABLED)
+            return hTopology == LITENYX_TOPO_ACTIVATION_DISABLED; // both-disabled coupling
+        if (hDerive == 0) return false;                          // 0 < H_derive
+        return hDerive <= hTopology;                             // ordering
+    }
+
+    LitenyxTopoRegime RegimeAt(uint32_t h) const {
+        if (IsDisabled() || h < hDerive)   return LitenyxTopoRegime::PreDerivation;
+        if (h < hTopology)                 return LitenyxTopoRegime::SoftAdvisory;
+        return LitenyxTopoRegime::HardAuthority;
+    }
+};
+
+// Concrete per-network activations (spec §8.2, FROZEN for Phase 4).
+inline LitenyxTopoActivation LitenyxTopoActivationRegtest() { return LitenyxTopoActivation{100, 300}; }
+inline LitenyxTopoActivation LitenyxTopoActivationTestnet() { return LitenyxTopoActivation{500, 1500}; }
+inline LitenyxTopoActivation LitenyxTopoActivationMainnet() {
+    return LitenyxTopoActivation{LITENYX_TOPO_ACTIVATION_DISABLED,
+                                 LITENYX_TOPO_ACTIVATION_DISABLED};
+}
+
 // ---- D_v1: per-block demand (stateless, spec §5.5) -------------------------
 // blockWeight MUST be the canonical GetBlockWeight(block). Integer-only; the
 // intermediate product fits int64 (4e6 * 1e4 = 4e10 << 2^63). A defensive clamp
