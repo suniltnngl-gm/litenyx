@@ -763,3 +763,168 @@ G-EA-1. Guardrails G-EA-1..4 recorded. No frozen invariant reopened. Proceed to
 Component 6 (Draining Overlay) — re-examined here as an ecosystem component,
 consuming the frozen boundary at 770496e with the emitter/provenance path still
 explicitly OPEN.
+
+---
+
+# Component 6 — Draining Overlay
+
+**Central question:** Does Phase 7 remain a strictly monotonic capability
+restriction over Phase 6, without acquiring lifecycle, topology, or
+commitment-creation authority?
+
+**Layered non-escalation invariant (the crux):**
+
+```
+Capabilities_P7(x) ⊆ Capabilities_P6(x) ⊆ CapabilitiesPermittedBy_P5(x)
+```
+
+**Verdict — two-part:**
+- **Frozen/proven overlay: MATURE.** The pure engine at `770496e` is a strict
+  monotonic restriction over the frozen Phase-6 result, keyed on identity for ABA
+  safety, with completion subordinated to actual Phase-5 retirement. It acquires
+  no lifecycle/topology/commitment-creation authority. D-K1..D-K18 green (C++11 +
+  C++20).
+- **Input boundary: intentionally INCOMPLETE (OPEN, not a defect).** The causal
+  fact that would make an eligible edge identity *required* to enter DRAINING is
+  undefined; the autonomous emitter / provenance predicate is deferred. The
+  system is designed-incomplete at exactly this seam.
+
+## Source anchors
+
+- `litenyx/LITENYX_draining_authority.h:81-97` — `DrainCommitment` (identity-keyed)
+  + `OperationalCapabilityMode {NORMAL, DRAINING}`.
+- `:99-119` — `DrainCapabilityProjection`.
+- `:127-136` — `LitenyxIsDraining` (D9 completion = Phase-5 Active).
+- `:183-208` — `ValidateDrainCommitmentSemantics` (D11 + semantics-half of D12).
+- `:220-242` — `LitenyxProjectDrainCapability` (D0/D1/D2 monotonic overlay).
+- `:248-259` — `LitenyxResolveDrainForLane` (full compose).
+- `cpp_reference/test/test_litenyx_draining_authority.cpp` — D-K1..D-K18.
+
+## Surface A — frozen/proven overlay (MATURE)
+
+- **D0 — no 4th authority state.** `LitenyxOperationalCapabilityMode` is a MODE of
+  an already-AUTHORIZED identity, not a member of `LitenyxExecutionAuthorityState`;
+  the Phase-6 enum/result is echoed unchanged (`state = p6.state`, `:225`).
+  Cross-checked by Component 5 Surface 1 ("no DRAINING member").
+- **D1 — monotonic restriction.** `effMayBind = mayBind_P6 && !draining`;
+  `effMayRoute = mayRoute_P6` (`:238-239`). Drain can only REMOVE bind; it never
+  touches route. `AUTHORIZED + DRAINING -> (MayBind=0, MayRoute=1)` is exactly
+  D-K2.
+- **D2 — Phase-6 denial dominance.** `draining = authorized && isDraining`
+  (`:231-232`); for REVOKED/UNKNOWN the mode is forced NORMAL and both caps stay
+  at the Phase-6 (denied) values (D-K4/D-K5). Drain never manufactures a route on
+  a P6-denied identity (D-K3).
+- **Non-escalation proven:** `effMayBind` and `effMayRoute` are each a boolean AND/
+  identity of the P6 value, so `{Eff} ⊆ {P6}` always (D-K6 exhaustively checks all
+  state x draining combinations). Composed with Component 5's
+  `Capabilities_P6 ⊆ CapabilitiesPermittedBy_P5`, the full chain
+  `P7 ⊆ P6 ⊆ P5-permitted` holds.
+- **D9 — completion only via actual Phase-5 retirement.** `LitenyxIsDraining`
+  returns Active-classification AND present AND `h >= start` (`:132-135`); the
+  instant the frozen merge fold retires the identity, draining ceases with no
+  Phase-7 completion event and no commitment-deletion mechanism (D-K7 one-way,
+  D-K12 complete-on-retire).
+- **D8 / ABA — identity-keyed.** `DrainCommitment` keys on `chainId`
+  (PersistentChainId), never a lane; a reused lane later bound to a different
+  identity cannot inherit a historical commitment (D-K14, which depends on the
+  Component-4 retirement triad).
+- **Cannot restore a P6-denied capability:** there is no code path where `draining`
+  sets any capability to true; it only ANDs bind toward false. Confirmed by the
+  subset property above.
+
+## Surface A negative-authority properties (all HOLD)
+
+```
+DrainCommitment  ⇏  MERGE                 (D-K16)
+DRAINING         ⇏  ScheduledRetirement   (D9; no RetireHeight, D-K13)
+Phase7           ⇏  LifecycleMutation     (engine takes L by const&, D-K8)
+Phase7           ⇏  TopologyMutation      (no topology surface consumed/produced)
+```
+
+- **`DrainCommitment ⇏ MERGE`:** the overlay has no topology authority; an
+  identity may remain DRAINING indefinitely while Active regardless of height
+  (D-K16). Drain does not force N down.
+- **`DRAINING ⇏ ScheduledRetirement`:** there is NO `RetireHeight` and no committed
+  completion height; `DrainCommitment` carries only `{present, chainId,
+  drainStartHeight}` (`:81-90`, D-K13). Retirement is emergent from Phase 5, not
+  scheduled by Phase 7.
+- **`Phase7 ⇏ LifecycleMutation`:** every entry point takes `L` as
+  `const LitenyxChainIdLifecycleState&`; D-K8 asserts byte-identical `L` before/
+  after consulting the overlay.
+- **`Phase7 ⇏ TopologyMutation`:** the engine neither reads a mutable topology
+  object nor emits one; it consumes only the frozen P6 result + `L_h` classifier.
+- **`merge ⇏ prior drain`** (D10 converse) also holds: an identity may retire with
+  no prior commitment (D-K17).
+
+## Surface B — OPEN provenance seam (catalogued, NOT solved)
+
+The pure engine proves the **semantic validation half** of commitment handling:
+`ValidateDrainCommitmentSemantics` decides admissibility against canonical state
+alone (regime derived, start OBS_WINDOW-aligned, identity Active + AUTHORIZED,
+edge-only D11) — this is the currently-representable half of D12 (D-K15, D-K18).
+
+It does NOT prove **canonical provenance/reproduction**: that every validator
+would independently reproduce `(id, drainStartHeight)` from canonical state (the
+full D12 statement). That is deferred with the emitter.
+
+### DA-OPEN-1 (the missing causal fact)
+> What canonical, consensus-visible fact makes an eligible edge identity REQUIRED
+> to ENTER draining (not merely eligible to drain)?
+
+Constraints inherited from the frozen findings F-A / F-B (spec v0.2), preserved
+here so the OPEN question is not re-answered with superseded proposals:
+
+- **DA-NOGO-1** — Do NOT reintroduce `MERGE_INTENT`: F-B established topology
+  commitment carries only `{nVersion,nHeight,nN,nLastTransition}`; there is no
+  merge-intent distinct from N-decrement without reopening Phase 4.
+- **DA-NOGO-2** — Do NOT reintroduce a committed/derived `RetireHeight`: F-A
+  established retirement is emergent (highest lane, only on N-decrement, only at an
+  OBS_WINDOW boundary), so no `RetireHeight` is committed. D9/D-K13 depend on this.
+- **DA-NOGO-3** — Do NOT assume a `Phase7DrainPressureSnapshot` (or any new
+  committed surface) as the answer. It was a proposal, not a mature principle; its
+  necessity is itself part of DA-OPEN-1 and must be justified, not presumed.
+
+Resolution order (unchanged from the frozen plan): DA-OPEN-1 must be answered
+SPEC-FIRST before any emitter code, daemon hook, or commitment serialization.
+
+## Central-question resolution
+
+YES for the overlay. Phase 7 is a strictly monotonic capability restriction over
+Phase 6 and acquires no lifecycle, topology, or commitment-creation authority; all
+four negative-authority properties hold, and the layered subset invariant
+`P7 ⊆ P6 ⊆ P5-permitted` is proven. The system is intentionally incomplete only
+at its INPUT boundary:
+
+```
+   ?                DrainCommitment        Pure P7 Overlay         Effective
+(OPEN canonical  ->  (input fact)      ->    (PROVEN,         ->   Capabilities
+ entry fact,          identity-keyed)         monotonic)
+ DA-OPEN-1)
+```
+
+## Guardrails (doctrine-level; no code change now)
+
+- **G-DA-1** — Phase 7 is capability-restriction ONLY. No Phase-7 code may mutate
+  `activeBindings`, `nextChainId`, topology `N`, or create/serialize committed
+  state. (Reinforces G-EA-1: even `effMayBind` is a predicate, and drain only
+  narrows it.)
+- **G-DA-2** — Completion is defined EXCLUSIVELY as actual Phase-5 retirement
+  (D9). No `RetireHeight`, no scheduled retirement, no Phase-7 completion event
+  may be introduced (DA-NOGO-2).
+- **G-DA-3** — `DrainCommitment` MUST remain keyed on PersistentChainId; keying on
+  a lane reopens the ABA hazard (depends on G-CL-3 / retirement triad).
+- **G-DA-4** — A true return from `ValidateDrainCommitmentSemantics` is NOT
+  autonomous provenance. Until DA-OPEN-1 + the emitter are resolved, no consumer
+  may treat semantic admissibility as proof the commitment would be canonically
+  reproduced (full D12).
+
+## Disposition
+
+Overlay (Surface A) is MATURE; the central question and layered non-escalation
+invariant resolve YES; all four negative-authority properties hold. The provenance
+seam (Surface B) is recorded as OPEN design boundary DA-OPEN-1 with no-go
+constraints DA-NOGO-1..3 — explicitly NOT a defect in the pure overlay. Guardrails
+G-DA-1..4 recorded. No frozen invariant reopened; emitter/provenance remains
+deferred as agreed. This completes the frozen dependency stack
+(Components 1-6). Next: outward into the broader ecosystem, beginning with
+Component 7 (Routing / XCT).
