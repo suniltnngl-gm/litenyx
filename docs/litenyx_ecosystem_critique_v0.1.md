@@ -1222,3 +1222,151 @@ frozen invariant reopened; no proposed mechanism elevated to principle.
 Live OPEN design boundaries now carried forward: SSC-OPEN-1, DA-OPEN-1, XCT-OPEN-1,
 XCT-OPEN-2, ATMP-OPEN-1, ATMP-OPEN-2. Next: continue outward (RPC surface /
 persistence-recovery / daemon integration) as directed.
+
+# Component 9 — Persistence / Recovery
+
+**Nature of this component.** Third step outward, and the most foundational: it
+revisits the most significant unresolved finding (SSC-OPEN-1) and tests whether
+the otherwise-mature pure-fold stack survives real node lifecycle events. If
+canonical state cannot be reliably recovered, every higher-level daemon
+integration inherits that weakness even when its pure engine is correct.
+
+**Central question:** After restart, reindex, crash recovery, or reorg, does every
+Litenyx consensus-relevant state converge to exactly the state implied by
+canonical history?
+
+```
+Restart + Reindex + CrashRecovery + Reorg  ->  State(CanonicalHistory)
+```
+
+**Scope distinction (held throughout this component):**
+
+```
+Litenyx component-state convergence   vs.   daemon canonical-history recovery
+```
+
+Litenyx does not itself prove arbitrary daemon crash recovery. It proves that
+GIVEN a correctly recovered canonical chain/index and the required block bodies,
+its component state converges. Claims below are scoped accordingly.
+
+**Verdict — three-part:**
+
+```
+P4/P5/P6      : Deterministically reconstructed GIVEN canonical history
+P7 Overlay    : Stateless; future commitment recovery NOT YET DEFINED (with DA-OPEN-1)
+P2 SharedSet  : Cold-start / rebuild convergence OPEN (SSC-OPEN-1 -> PR-OPEN-1)
+```
+
+```
+No systemic mutable-state recovery problem identified | P2 recovery contract OPEN | P7 future commitment recovery NOT YET DEFINED
+```
+
+## Deliverable 1 — Per-family recovery-model classification
+
+```
+Persisted Canonical State  |  Deterministically Reconstructed State  |  Ephemeral Runtime State
+```
+
+| State family | Model | Anchor |
+| --- | --- | --- |
+| SharedSpendSet (Phase 2) | Ephemeral Runtime State | in-memory `unordered_map`; NO Serialize/Unserialize, NO disk, NO LoadFromDisk (`LITENYX_sharedstate.h:71-74`); mutated only via `RecordSpend`/`RevertSpend` on Connect/Disconnect |
+| TopologyState (Phase 4) | Deterministically Reconstructed | "from CANONICAL CHAIN HISTORY ALONE … never from any persisted topology cache … DisconnectBlock needs NO undo" (`LITENYX_validation.h:43-56`, `LITENYX_topology_authority.h:489`) |
+| ChainId Lifecycle (Phase 5) | Deterministically Reconstructed | "Re-derivation from the canonical prefix means DisconnectBlock needs NO lifecycle undo" (`LITENYX_validation.h:71-80`) |
+| Execution Authority (Phase 6) | Deterministically Reconstructed (stateless projection) | pure fold over reconstructed `L_h`; "Re-derivation means DisconnectBlock needs NO undo" (`LITENYX_validation.h:95-110`) |
+| Draining overlay (Phase 7 engine) | Stateless (N/A today) | engine-only, no committed state, no persistence surface (Component 6) |
+| `DrainCommitment` recovery (Phase 7 future) | NOT YET DEFINED | representation/provenance OPEN (DA-OPEN-1); recovery model reviewable only once it becomes consensus-visible |
+| TopologyTracker (advisory) | Ephemeral Runtime State (non-consensus) | singleton + `Reset()` trapdoor (Component 2 F-TOPO-3) |
+
+**Critical clarification.** `LitenyxSerialize{Lifecycle,Topology}State` are the
+COMMITMENT-HASH PREIMAGES (`LITENYX_chainid_lifecycle.h:145-187` -> `double_sha256`),
+NOT a persisted state store. They compute the consensus digest committed in the
+block and feed reconstruction VERIFICATION — not disk recovery.
+
+## Deliverable 2 — Convergence, per family (scoped)
+
+| Family | Convergence claim |
+| --- | --- |
+| Topology / Lifecycle / ExecAuthority | GIVEN the same recovered canonical history and required block bodies, each deterministically converges to the same state WITHOUT component-specific undo or persisted caches. (Not a claim that the Litenyx layer proves arbitrary crash recovery — that depends on daemon canonical-history recovery first.) |
+| P7 pure overlay | Stateless: nothing to recover TODAY. `DrainCommitment` recovery is NOT YET DEFINED and will require its own review once representation/provenance exist. |
+| SharedSpendSet | Reorg reversibility established IN-RUN (`RecordSpend`/`RevertSpend` symmetry, `sharedstate.h:19-24`, `test_litenyx.cpp:74`). Cold-start (restart / reindex / crash) reconstruction NOT proven — this is SSC-OPEN-1. |
+
+The three reconstructed families satisfy the convergence equation by construction
+(pure fold), CONDITIONAL on daemon canonical-history recovery. The SharedSpendSet
+cold-start dimension is the sole component-level gap.
+
+## Deliverable 3 — Is SSC-OPEN-1 isolated or systemic?
+
+```
+SSC-OPEN-1 is an ISOLATED Phase-2 recovery gap, not a systemic pattern
+```
+
+Every Phase-4/5/6 family is reconstructed-from-canonical-history (convergent by
+construction given canonical recovery); Phase-7 is stateless today. ONLY the
+SharedSpendSet holds consensus-relevant state (`outpoint -> chainId`, enforcing the
+cross-chain double-spend invariant) with no serialization / no disk store AND no
+proven cold-start reconstruction contract. Its reorg safety IS established; the gap
+is specifically the restart / reindex / crash rebuild dimension.
+
+Caveat carried forward: this "isolated today" result must be re-checked if and when
+`DrainCommitment` becomes genuinely consensus-visible — a second consensus-relevant
+persisted/recoverable object would then exist (see the P7 row above).
+
+## The open question (SSC-OPEN-1, sharpened)
+
+### PR-OPEN-1 (recovery model for SharedSpendSet) — refines SSC-OPEN-1
+> What canonical recovery model guarantees that `SharedSpendSet` after startup,
+> reindex, crash recovery, and canonical reorganization is EXACTLY equivalent to
+> the deterministic fold of canonical multi-chain spend history, while preserving
+> reorg reversibility and operating under the protocol's pruning assumptions?
+
+Candidate models to be EVALUATED later (not prescribed here): persistence with
+reorg-consistent flush/rollback; full canonical replay on startup/reindex;
+authenticated checkpoint + verified replay. The requirement is convergence +
+reversibility + pruning-compatibility, not a specific implementation.
+
+**No-go constraints:**
+
+- **PR-NOGO-1** — the chosen model MUST NOT make the spend-set an IRREVERSIBLE
+  global flag; reorg-reversibility (`RevertSpend` symmetry) must survive it
+  (`sharedstate.h:24`).
+- **PR-NOGO-2** — do NOT introduce a persisted cache for the reconstructed
+  families (Topology/Lifecycle/ExecAuthority); their purity is a proven asset
+  (`validation.h:45,55`), and a cache would create a second, corruptible source of
+  truth.
+- **PR-NOGO-3** — any recovery mechanism that requires historical block bodies
+  MUST explicitly define its compatibility with pruning (it must NOT be presumed
+  that reconstruction necessarily requires all bodies). The hooks already
+  fail-closed on "reconstruction inputs unavailable / pruned body"
+  (`LITENYX_validation.cpp:159,224`); recovery must define pruned-node behavior.
+
+## Guardrails (doctrine-level; no code change)
+
+- **G-PR-1** — SharedSpendSet recovery, whatever the model, preserves reorg
+  reversibility (maps PR-NOGO-1).
+- **G-PR-2** — reconstructed pure families remain cache-free; canonical
+  re-derivation stays the single source of truth (maps PR-NOGO-2).
+- **G-PR-3** — recovery is pruning-aware: any body-dependent mechanism defines its
+  behavior on a pruned node explicitly (maps PR-NOGO-3).
+- **G-PR-4** — if `DrainCommitment` becomes consensus-visible, its
+  persistence/reconstruction model gets a dedicated recovery review before
+  activation; the P7 engine's current statelessness must not be read as a standing
+  recovery guarantee for a future committed object.
+
+## Disposition
+
+```
+No systemic mutable-state recovery problem identified | P2 recovery contract OPEN | P7 future commitment recovery NOT YET DEFINED
+```
+
+The mature pure-fold stack (P4/P5/P6) converges to canonical-history state under
+the full lifecycle GIVEN daemon canonical recovery — no component-specific undo, no
+caches. Phase-7's overlay is stateless today, with `DrainCommitment` recovery
+explicitly NOT YET DEFINED (tied to DA-OPEN-1) rather than vacuously convergent.
+The sole component-level gap is the Phase-2 SharedSpendSet cold-start
+reconstruction contract, sharpened as PR-OPEN-1 and confirmed ISOLATED. Recorded:
+PR-OPEN-1, PR-NOGO-1..3, G-PR-1..4. No frozen invariant reopened; no implementation
+choice prematurely prescribed.
+
+Live OPEN design boundaries now carried forward: SSC-OPEN-1 (== PR-OPEN-1),
+DA-OPEN-1, XCT-OPEN-1, XCT-OPEN-2, ATMP-OPEN-1, ATMP-OPEN-2. Next: continue outward
+(RPC surface / daemon integration) as directed.
