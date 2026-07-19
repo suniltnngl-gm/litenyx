@@ -1,9 +1,11 @@
 # Litenyx SharedSpendSet — Canonical-State Doctrine Decision Brief — v0.1
 
-> **Status: SPEC-FIRST ANALYSIS ONLY.** No code. No Phase-2 reopening. This brief
-> selects the canonical-ownership doctrine for `SharedSpendSet` and freezes the
-> invariants that must precede any separate fix for INT-OPEN-1, RPC-OPEN-1, or
-> PR-OPEN-1. It is the prerequisite identified in the Component 1-11 synthesis
+> **Status: SPEC-FIRST ANALYSIS ONLY — doctrine + SS-INV-1..7 RATIFIED/FROZEN
+> (v0.1).** No code. No Phase-2 reopening. This brief selects the
+> canonical-ownership doctrine for `SharedSpendSet` and freezes the invariants
+> (Section 9, ratified via the Section 9.1 ambiguity review) that must precede any
+> separate fix for INT-OPEN-1, RPC-OPEN-1, or PR-OPEN-1. It is the prerequisite
+> identified in the Component 1-11 synthesis
 > (`litenyx_ecosystem_critique_v0.1.md`).
 
 ## 0. Why this brief exists
@@ -204,36 +206,109 @@ Model C alone is incomplete without A's runtime staging.
 These are the doctrine outputs. Freeze them first; then INT-OPEN-1, RPC-OPEN-1,
 and PR-OPEN-1 are each designed AGAINST them (not improvised).
 
+> **RATIFICATION STATUS: FROZEN (v0.1).** SS-INV-1..7 below are ratified after the
+> four-point ambiguity review (Section 9.1). They are now the binding constraints
+> for INT-OPEN-1, RPC-OPEN-1, and PR-OPEN-1. Any later change is a doctrine
+> revision (v0.2+), not a fix-time decision.
+
 - **SS-INV-1 (Truth).** `SharedSpendSet_h == Fold(canonical multi-chain spend
   history through h)`. Storage/checkpoints are representations, never truth.
-- **SS-INV-2 (Determinism / ordering).** The fold input order is a fixed function
-  of committed history (ascending height, then the existing intra-block tx/input
-  iteration order). Honest nodes converge byte-identically.
-- **SS-INV-3 (Purity).** No value not derivable from canonical history may alter
-  the logical set (closes RPC-OPEN-1 at the doctrine level: RPC mutation of the
-  logical set is non-canonical and impermissible; any debug affordance is
-  regtest-gated and cannot exist on main/test).
-- **SS-INV-4 (Atomic commit-coincidence).** The set's mutation for a block becomes
-  observable ONLY at that block's own connect-commit boundary; a rejected block
-  leaves `SharedSpendSet_{h-1}` (closes INT-OPEN-1 at the doctrine level).
+- **SS-INV-2 (Determinism / total canonical ordering).** The fold consumes spends
+  in a TOTAL deterministic order that is a fixed function of committed history
+  ALONE, sufficient for any two validators folding identical canonical histories
+  to produce byte-identical `SharedSpendSet_h`. The order is: ascending block
+  height; within a block, ascending transaction index (`block.vtx` order, coinbase
+  excluded); within a transaction, ascending input index (`vin` order). This total
+  order MUST be treated as consensus-normative — NOT arrival/timing/branch order.
+  If any future multi-chain structure (e.g. interleaved per-lane blocks at equal
+  height) is not fully disambiguated by (height, txindex, vinindex), a successor
+  spec MUST extend this ordering BEFORE that structure is activated; the ordering
+  source may be deferred to that spec, but its EXISTENCE and consensus-normativity
+  are frozen here.
+- **SS-INV-3 (History-only mutation / Purity).** In production, the logical set
+  changes IF AND ONLY IF a canonical connect/disconnect transition succeeds:
+
+  ```
+  Δ SharedSpendSet (production)  <=>  successful canonical connect/disconnect transition
+  ```
+
+  No value not derivable from canonical history (RPC writes, wall-clock, mempool,
+  peer hints) may alter the logical set. Recovery reconstruction is permitted to
+  MATERIALIZE the derived state (it computes the fold) but is NOT an exogenous
+  mutation and NEVER a new source of truth. Consequence (closes RPC-OPEN-1 at the
+  doctrine level): RPC mutation of the logical set is non-canonical and
+  impermissible on any network; any debug affordance is compile-time/runtime
+  regtest-gated and cannot exist on main/test.
+- **SS-INV-4 (Atomic commit-coincidence).** A candidate block's SharedSpendSet
+  mutations become observable IF AND ONLY IF the corresponding canonical block
+  transition successfully commits. Equivalently:
+
+  ```
+  ConnectBlock(B) = Reject   =>   SSS_after = SSS_before   (bit-for-bit)
+  ```
+
+  The set's mutation for `B` is visible ONLY at `B`'s own connect-commit boundary;
+  a rejected block leaves `SharedSpendSet_{h-1}` exactly unchanged (closes
+  INT-OPEN-1 at the doctrine level). This binds the SharedSpendSet commit point to
+  the block's own commit point — no earlier partial visibility.
 - **SS-INV-5 (Reorg reversibility).** Disconnecting a block restores exactly the
   pre-block fold state; checkpoints are keyed by block hash and invalidated when
   not on the active chain.
-- **SS-INV-6 (Recovery convergence + fail-closed).** After restart/reindex/crash,
-  the set converges to `Fold(canonical history)` via verified-checkpoint +
-  forward-replay OR full replay; on missing/unverifiable inputs it fails closed,
-  never falling back to an unverified snapshot or weaker state (closes PR-OPEN-1 at
-  the doctrine level).
-- **SS-INV-7 (Checkpoint subordination + completeness).** A checkpoint is
-  hash-authenticated, captures the COMPLETE fold state at its height, is OPTIONAL
-  (correctness holds with none present), and is always verifiable against
-  re-derivation.
+- **SS-INV-6 (Recovery convergence + fail-closed, with the two-state distinction).**
+  After restart/reindex/crash, the set MUST converge to `Fold(canonical history)`
+  via verified-checkpoint + forward-replay OR full replay. Recovery has exactly two
+  admissible outcomes:
+
+  ```
+  (established equivalence to the canonical fold)  -> proceed
+  (cannot establish equivalence)                   -> fail closed (halt/refuse), NEVER proceed
+  ```
+
+  A node that cannot establish equivalence to the canonical fold MUST NOT silently
+  start with an empty/partial set, MUST NOT treat a checkpoint as unquestioned
+  truth, and MUST NOT fall back to any weaker state. Inability-to-reconstruct is
+  distinct from permission-to-continue; only the former's resolution (proven
+  equivalence) grants the latter (closes PR-OPEN-1 at the doctrine level).
+- **SS-INV-7 (Checkpoint subordination, completeness, and canonical binding).** A
+  checkpoint MUST be: (a) hash-authenticated; (b) BOUND to an unambiguous canonical
+  history position (block hash + height), so a stale or fork-relative checkpoint is
+  detectable; (c) COMPLETE — it captures the full fold state at that position (not
+  a delta requiring pre-position bodies); (d) accompanied by a VERIFIABLE
+  CONTINUATION PATH — the post-checkpoint canonical bodies needed to replay forward
+  to the tip must be present, else the checkpoint is unusable and recovery degrades
+  per SS-INV-6; (e) OPTIONAL (correctness holds with none present); and (f) always
+  verifiable against re-derivation. Authentication ALONE is insufficient: without
+  (b) and (d) an authentic checkpoint could become a second source of truth, which
+  SS-INV-1 forbids.
+
+### 9.1 Four-point ambiguity review (record of ratification)
+
+1. **SS-INV-2 ordering source** — RESOLVED: froze the concrete
+   (height, txindex, vinindex) total order as consensus-normative AND required a
+   successor spec to extend it before any multi-chain structure it cannot
+   disambiguate is activated. Existence + normativity frozen; extended source may
+   be deferred.
+2. **SS-INV-4 commit coincidence** — RESOLVED: stated as an iff bound to successful
+   canonical commit, with the explicit `Reject => SSS_after = SSS_before`
+   (bit-for-bit) guarantee.
+3. **SS-INV-6 fail-closed** — RESOLVED: split into the two admissible outcomes;
+   inability-to-reconstruct is separated from permission-to-continue; empty/partial
+   start and unquestioned-checkpoint start are both forbidden.
+4. **SS-INV-7 completeness** — RESOLVED: authentication augmented with canonical
+   position binding (b) and a verifiable continuation path (d), preventing an
+   authentic-but-stale/fork-relative checkpoint from becoming a second truth.
+
+Plus **SS-INV-3 strengthening** — RESOLVED: restated as the production iff
+`Δ SharedSpendSet <=> successful canonical connect/disconnect`, with recovery
+explicitly allowed to MATERIALIZE (not mutate) the derived state.
 
 ## 10. Disposition
 
-Doctrine selected: **derived-fold truth + transactional runtime + optional
-verified-checkpoint recovery + history-only mutation.** Seven invariants
-(SS-INV-1..7) are proposed for freezing. This brief proposes NO code and reopens NO
-Phase-2 behavior. Once SS-INV-1..7 are ratified, the three fixes proceed
-independently against them, in the synthesis-ordered sequence:
-`doctrine -> INT-OPEN-1 -> RPC-OPEN-1 -> PR-OPEN-1`.
+Doctrine selected and **FROZEN (v0.1)**: **derived-fold truth + transactional
+runtime + optional verified-checkpoint recovery + history-only mutation.** Seven
+invariants (SS-INV-1..7) are ratified after the four-point ambiguity review
+(Section 9.1). This brief proposes NO code and reopens NO Phase-2 behavior. The
+three fixes now proceed independently AGAINST the frozen invariants, in the
+synthesis-ordered sequence: `doctrine -> INT-OPEN-1 -> RPC-OPEN-1 -> PR-OPEN-1`.
+Any change to SS-INV-1..7 is a doctrine revision (v0.2+), never a fix-time
+decision.
