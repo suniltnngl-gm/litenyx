@@ -422,14 +422,53 @@ Phase 5 commits `LifecycleStateHash(L_h)`. To preserve the FROZEN Phase-4
 `LitenyxAuxHeader` V1/V2 framing byte-for-byte, Phase 5 introduces a NEW wire
 version rather than mutating V2:
 
-- **`V3` (`LITENYX_AUX_MAGIC_V3`)** = V2 layout + a trailing 32-byte
-  `lifecycleCommitment`. `HasLifecycleCommitment() := IsV3()` (structural, not a
-  zero sentinel), mirroring the Phase-4 `HasTopologyCommitment() := IsV2()`
-  ruling. V1/V2 blocks remain byte-identical and carry no lifecycle bytes.
+- **`V3` (`LITENYX_AUX_MAGIC_V3 = 0x4C595933`, "LYY3")** = the EXACT 88-byte V2
+  serialization prefix + a trailing 32-byte `lifecycleCommitment`. Total **120
+  bytes**. `HasLifecycleCommitment() := IsV3()` (structural, not a zero
+  sentinel), mirroring the Phase-4 `HasTopologyCommitment() := IsV2()` ruling.
+  V1 (56B) / V2 (88B) blocks remain byte-identical and carry no lifecycle bytes;
+  `magic` remains the SOLE wire-version discriminator (Phase-4 RULING 2).
 
-> The exact byte length of V3 and its KAT are pinned when the carrier is
-> implemented. No Phase-4 struct field changes; `magic` remains the sole
-> wire-version discriminator (Phase-4 RULING 2, preserved).
+**Two independent, non-overlapping commitments (FROZEN):**
+
+```
+topologyCommitment_h  = TopologyStateHash(T_h)     (raw, no domain — Phase-4 §5.7)
+lifecycleCommitment_h = LifecycleStateHash(L_h)    (raw, no domain — Phase-5 §4.0)
+V3_h                  = V2Body_h (88B) || lifecycleCommitment_h (32B)   (120B)
+```
+
+The lifecycle commitment does NOT replace, reinterpret, duplicate, cross-hash,
+or recursively include the topology commitment. No `Domain_LifecycleV1` prefix
+is introduced: each committed object already has a frozen canonical state-hash
+with an unambiguous, distinct serialization (13-byte topology vs 21-byte
+lifecycle, each version-prefixed). A V3 block is valid only if
+`Header.topologyCommitment == ExpectedT_h` AND
+`Header.lifecycleCommitment == ExpectedL_h`, each independently derived from
+canonical history. Serialization is purely additive: the V1 and V2 branches are
+byte-for-byte unchanged; V3 reads/writes the exact V2 prefix, then the 32-byte
+`lifecycleCommitment`.
+
+**V3 genesis KAT (FROZEN — derived by the independent reference
+`cpp_reference/reference/v3_carrier_kat.py`, audited, NOT taken from the C++
+serializer):** for the canonical genesis context header
+(`magic=V3, chainId=1`, all other legacy fields zero;
+`topologyCommitment=TopologyStateHash(T_0)`,
+`lifecycleCommitment=LifecycleStateHash(L_0)`):
+
+```
+topologyCommitment(T_0)  = 71667e04205a7150268d09b82c13849ddd2d187cbf73f5d83b2aecea693bfc09
+lifecycleCommitment(L_0) = ca5225a14fe2d5da35823650bb25c43edf63a459f56153b8f0570eb17302c9e1
+V3 length                = 120
+V3 stream (hex)          = 3359594c010000000000000000000000000000000000000000
+                           0000000000000000000000000000000000000000000000000000
+                           0071667e04205a7150268d09b82c13849ddd2d187cbf73f5d83b
+                           2aecea693bfc09ca5225a14fe2d5da35823650bb25c43edf63a4
+                           59f56153b8f0570eb17302c9e1
+SHA256d(V3 stream)       = 5b60d2f7431b1f018ce1012becee2d883effac52c4da1902941c97a1c21d5f5b
+```
+
+> The C++ serializer MUST be proven to reproduce this reference byte-for-byte
+> (never the reverse). No Phase-4 struct field changes; only additive V3 fields.
 
 ### 6.2 Validation order in `ConnectBlock` (ENFORCEMENT DEFERRED to a later step)
 
