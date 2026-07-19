@@ -244,23 +244,79 @@ governed by PR-OPEN-1 / SS-INV-6/7 (§4.6).
 - **G-INT-1** — SharedSpendSet mutation is now published only on the successful
   canonical-transition completion path. Satisfied.
 
-## 7. Open sub-questions deferred to implementation (not decided here)
+## 7. Sub-questions — VERIFIED against the vendored tree (dogecoin v1.14.9)
 
-- **INT-Q1** — the precise code hook point for "publish on `ConnectTip` completion":
-  whether it is a call at the tail of the success path in `ConnectTip`, or a
-  registered batch the success path drives. (Implementation detail; both satisfy
-  §4.0 R1–R3.)
-- **INT-Q2** — whether staging should reuse the existing free-function API or a new
-  scoped type. (Ergonomics; must not create a second reader path — RPC-NOGO/G-INT-3.)
-- **INT-Q3** — reindex/IBD path: confirm the same stage/publish boundary applies
-  when many blocks connect in sequence (expected: yes, one publish per connected
-  block at its own completion). To be verified against the vendored tree.
-- **INT-Q4 (load-bearing verification)** — confirm against the VENDORED Dogecoin
-  tree the exact ordered list of failure-capable steps in `ConnectTip` AFTER
-  `view.Flush()` (expected at least `FlushStateToDisk`), so the publish hook is
-  bound to the true LAST failure-capable step's success. If any failure-capable
-  step exists after the assumed one, the publish point moves accordingly — R1–R3
-  remain the invariant regardless.
+> Verification source: `github.com/dogecoin/dogecoin` tag **v1.14.9**,
+> `src/validation.cpp`, `ConnectTip` (lines 2313–2361) and `ActivateBestChainStep`
+> (lines 2440–2509). The production Makefile clones `master --depth 1` unpinned
+> (`deploy/Makefile:44`); see INT-Q5 (new) — a pin is REQUIRED before implementation.
+> The `ConnectTip` structure below is stable across the 1.14 lineage.
+
+### INT-Q4 (load-bearing) — RESOLVED: last failure-capable step = `FlushStateToDisk`
+
+Verified ordered `ConnectTip` body:
+
+```
+2321  ReadBlockFromDisk .................... failure-capable (AbortNode)
+2331  { CCoinsViewCache view(pcoinsTip);      <-- scope opens
+2333    ConnectBlock(...)  [LITENYX HOOKS] .. failure-capable (return error) -> view discarded
+2342    view.Flush(); assert(flushed);        NOT graceful-failure-capable (assert only)
+2344  }                                       <-- scope closes
+2348  FlushStateToDisk(state, IF_NEEDED) ... **LAST failure-capable step -> return false**
+2353  mempool.removeForBlock(...) .......... void (not failure-capable)
+2355  UpdateTip(...) ....................... void (not failure-capable)
+2360  return true;
+```
+
+- **Confirmed:** `view.Flush()` (2342) is NOT the last failure-capable operation —
+  it is guarded only by `assert`, and `FlushStateToDisk` at **2348** follows it and
+  can `return false`. This VINDICATES §2.1/§4.0's refusal to bind publication to
+  `view.Flush()`.
+- **Legitimate SSS publish point:** AFTER line 2348 succeeds — i.e. at the
+  non-failure-capable tail (2353–2360, at/after `UpdateTip`). At that point the
+  canonical connect-transition cannot fail; publishing `Δ_B` there satisfies R2
+  exactly.
+- No failure-capable step exists after 2348; R1–R3 hold with the publish bound to
+  "post-2348 success," concretely realizable at the `UpdateTip`/return tail.
+
+### INT-Q3 — RESOLVED: per-block publish under IBD/reindex/reorg
+
+`ActivateBestChainStep` (2451–2494) builds `vpindexToConnect` (batches ≤32) and calls
+`ConnectTip` **once per block** in a loop (`BOOST_REVERSE_FOREACH`, 2469). Each
+`ConnectTip` connects one block atomically; a failure `break`s the loop
+(2470–2484) and pops the just-attempted block from `connectTrace` (2479). Therefore:
+**one stage→publish cycle per connected block, at that block's own `ConnectTip`
+completion** — reindex/IBD/import all funnel through this same loop (matches
+Component-11 Surface 6 no-bypass). Confirmed as expected.
+
+### INT-Q1 — RESOLVED (hook point): `ConnectTip` success tail
+
+Publish `Δ_B` at the `ConnectTip` non-failure-capable tail (post-2348; at/after
+`UpdateTip`, 2353–2360). Both viable forms (an explicit call there, or a batch the
+success tail drives) satisfy R1–R3; the explicit-call-at-tail form is simplest and
+is the recommended shape. The staging object is owned by a scope that guarantees
+discard on every `return false`/early exit before that tail (INT-Q2).
+
+### INT-Q2 — RESOLVED (ownership/lifetime): scoped candidate-delta, single reader
+
+- `Δ_B` is owned by a per-`ConnectTip` scope (RAII), NOT a second global singleton.
+  On `ConnectBlock` failure (2335) the enclosing `{...}` (2331–2344) already discards
+  `view`; `Δ_B` MUST share that discard-by-default lifetime so a rejected connect
+  leaves the live set untouched (R3). This uses scope exit, NOT try/catch on the
+  consensus-critical steps (INT-NOGO-3 preserved).
+- It MUST NOT create a second reader path into the spend set (G-INT-3 / RPC-NOGO):
+  the live singleton remains the sole reader surface; `Δ_B` is invisible until publish
+  (R1). A new scoped type is acceptable; reusing the existing free-function writer as
+  a *staging* writer is acceptable only if it targets `Δ_B`, never the live set,
+  pre-publish.
+
+### INT-Q5 (NEW — prerequisite finding): pin the vendored daemon version
+
+`deploy/Makefile:44` clones `master --depth 1` with NO tag/commit pin, so the tree
+the hooks compile against is a MOVING target. INT-Q1–Q4 above are verified against
+**v1.14.9**. Before implementation, the build MUST pin a specific tag/commit (e.g.
+`--branch v1.14.9`) so the verified `ConnectTip` structure is the one actually built.
+This is an implementation-track prerequisite, not a design change to M3.
 
 ## 8. Disposition
 
@@ -276,8 +332,18 @@ follow it), so publication binds to successful `ConnectTip` completion; (2) LOGI
 commit-coincidence (this fix) is explicitly separated from CRASH-ATOMIC durability
 (PR-OPEN-1 / SS-INV-6/7). M3 closes rejected-connect contamination; the crash
 window between durable chain advancement and in-memory SSS materialization is closed
-by recovery re-deriving the canonical fold, not by this fix. The last
-failure-capable step in `ConnectTip` must be verified against the vendored tree
-(INT-Q4). No Phase-2 code written; no invariant reopened. Next in sequence (after
-this spec is accepted): RPC-OPEN-1 design against SS-INV-3, then PR-OPEN-1 against
-SS-INV-6/7.
+by recovery re-deriving the canonical fold, not by this fix.
+
+**INT-Q4 VERIFIED (dogecoin v1.14.9, `validation.cpp` `ConnectTip` 2313–2361):** the
+last failure-capable step is `FlushStateToDisk(state, FLUSH_STATE_IF_NEEDED)` at line
+2348; `view.Flush()` (2342) is assert-guarded, not graceful-failure-capable. The
+legitimate SSS publish point is the non-failure-capable tail (post-2348, at/after
+`UpdateTip`). INT-Q1/Q2/Q3 also resolved against the same tree; INT-Q5 (new) requires
+pinning the currently-unpinned `master` clone (`deploy/Makefile:44`) to v1.14.9 before
+implementation. No Phase-2 code written; no invariant reopened; M3 R1–R3 unchanged.
+
+Implementation-track status: INT-OPEN-1 = SPECIFIED / IMPLEMENTATION-PENDING with the
+`ConnectTip` attach points now VERIFIED. Next: produce the M3 implementation map
+(stage/discard/publish attach), then implement + KAT/integration tests proving
+`ConnectBlock(B)=Reject ⇒ SSS_after = SSS_before` at P4/P5/P6 and the post-`ConnectBlock`
+`FlushStateToDisk` failure point.
