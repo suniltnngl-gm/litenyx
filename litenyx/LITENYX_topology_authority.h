@@ -29,6 +29,7 @@
 #include <vector>
 #include <utility>
 #include <algorithm>
+#include <string>
 
 #include "LITENYX_types.h"
 #include "LITENYX_topology.h" // frozen controller: LitenyxTopoDecide/Apply/TransitionHeight
@@ -90,6 +91,18 @@ struct LitenyxTopoActivation {
 inline LitenyxTopoActivation LitenyxTopoActivationRegtest() { return LitenyxTopoActivation{100, 300}; }
 inline LitenyxTopoActivation LitenyxTopoActivationTestnet() { return LitenyxTopoActivation{500, 1500}; }
 inline LitenyxTopoActivation LitenyxTopoActivationMainnet() {
+    return LitenyxTopoActivation{LITENYX_TOPO_ACTIVATION_DISABLED,
+                                 LITENYX_TOPO_ACTIVATION_DISABLED};
+}
+
+// Select the frozen per-network activation by CChainParams::NetworkIDString()
+// ("main"/"test"/"regtest"). Any unknown network is DISABLED (fail dormant).
+// Keeping the selection here (not in Consensus::Params) avoids modifying the base
+// Dogecoin struct while still being a per-network consensus constant.
+inline LitenyxTopoActivation LitenyxTopoActivationForNetwork(const std::string& netId) {
+    if (netId == "regtest") return LitenyxTopoActivationRegtest();
+    if (netId == "test")    return LitenyxTopoActivationTestnet();
+    if (netId == "main")    return LitenyxTopoActivationMainnet();
     return LitenyxTopoActivation{LITENYX_TOPO_ACTIVATION_DISABLED,
                                  LITENYX_TOPO_ACTIVATION_DISABLED};
 }

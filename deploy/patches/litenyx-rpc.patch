@@ -2,17 +2,18 @@ diff --git a/src/rpc/mining.cpp b/src/rpc/mining.cpp
 index 80530d2..978ebac 100644
 --- a/src/rpc/mining.cpp
 +++ b/src/rpc/mining.cpp
-@@ -20,6 +20,9 @@
+@@ -20,6 +20,10 @@
  #include "net.h"
  #include "pow.h"
  #include "rpc/server.h"
 +#include "litenyx/LITENYX_sharedstate.h"
 +#include "litenyx/LITENYX_auxpow.h"
 +#include "litenyx/LITENYX_topology_tracker.h"
++#include "litenyx/LITENYX_topology_authority.h"
  #include "txmempool.h"
  #include "util.h"
  #include "utilstrencodings.h"
-@@ -32,6 +35,11 @@
+@@ -32,6 +36,12 @@
  
  #include <univalue.h>
  
@@ -20,17 +21,19 @@ index 80530d2..978ebac 100644
 +// Litenyx shared-state test RPC defined later in this file.
 +UniValue testlitenyxsharedstate(const JSONRPCRequest& request);
 +UniValue testlitenyxtopology(const JSONRPCRequest& request);
++UniValue testlitenyxtopoauthority(const JSONRPCRequest& request);
 +
  using namespace std;
  
  /**
-@@ -975,8 +983,180 @@ static const CRPCCommand commands[] =
+@@ -975,8 +985,274 @@ static const CRPCCommand commands[] =
      { "util",               "estimatepriority",       &estimatepriority,       true,  {"nblocks"} },
      { "util",               "estimatesmartfee",       &estimatesmartfee,       true,  {"nblocks"} },
      { "util",               "estimatesmartpriority",  &estimatesmartpriority,  true,  {"nblocks"} },
 +
 +    { "litenyx",            "testlitenyxsharedstate",  &testlitenyxsharedstate,  true,  {"mode","chainid","outpoints"} },
 +    { "litenyx",            "testlitenyxtopology",     &testlitenyxtopology,     true,  {"mode","chainid","mc","height"} },
++    { "litenyx",            "testlitenyxtopoauthority",&testlitenyxtopoauthority,true,  {"mode","net","height","arg4","arg5"} },
  };
  
 +/** Litenyx Phase 2 regtest-only RPC: exercise the REAL global shared spent-set
@@ -199,6 +202,99 @@ index 80530d2..978ebac 100644
 +        }
 +    } catch (const std::exception& e) {
 +        throw JSONRPCError(RPC_MISC_ERROR, std::string("LITENYX-topology: ") + e.what());
++    }
++}
++
++/** Litenyx Phase 4B(4) regtest-only RPC: exercise the REAL consensus-authority
++ *  decision (regime -> derive expected T_h from a CANONICAL synthetic chain ->
++ *  pure VerifyTopologyCommitment) that ConnectBlock enforces. This drives the
++ *  actual compiled engine (LITENYX_topology_authority.h) so the Python harness
++ *  can assert the activation-boundary matrix, path-independence, and
++ *  reorg-truncation WITHOUT a V2-commitment-aware miner (block production is a
++ *  separate scope). It creates NO process-local state and is NOT a consensus
++ *  dependency.
++ *
++ *  Deterministic synthetic canonical chain: `height` blocks, all on chain 0 at
++ *  half MAX_BLOCK_WEIGHT (a pure function of height), matching the C++ proofs.
++ *
++ *  Modes:
++ *    regime <net> <height>
++ *        -> {regime}                                  (Pre/Soft/Hard)
++ *    expected <net> <height>
++ *        -> {commitment}   TopologyStateHash(expected T_h) hex
++ *    decide <net> <height> <present:0|1> <commitmentHex>
++ *        -> {verdict}      "valid" | "invalid" | "advisory_mismatch"
++ */
++UniValue testlitenyxtopoauthority(const JSONRPCRequest& request)
++{
++    auto getInt = [](const UniValue& v) -> long {
++        if (v.isNum()) return (long)v.get_int64();
++        return atol(v.get_str().c_str());
++    };
++    auto buildChain = [](uint32_t h) {
++        std::vector<LitenyxCommittedBlock> v(h);
++        for (auto& b : v) { b.chainId = 0; b.blockWeight = LITENYX_MAX_BLOCK_WEIGHT / 2; }
++        return v;
++    };
++    auto regimeName = [](LitenyxTopoRegime r) -> std::string {
++        switch (r) {
++            case LitenyxTopoRegime::PreDerivation: return "PreDerivation";
++            case LitenyxTopoRegime::SoftAdvisory:  return "SoftAdvisory";
++            case LitenyxTopoRegime::HardAuthority: return "HardAuthority";
++        }
++        return "unknown";
++    };
++    try {
++        if (request.fHelp || request.params.size() < 3)
++            throw std::runtime_error(
++                "testlitenyxtopoauthority \"mode\" \"net\" height [arg4] [arg5]\n"
++                "\nExercise the Litenyx consensus-authority topology decision.\n"
++                "mode:   \"regime\" | \"expected\" | \"decide\"\n"
++                "net:    \"main\" | \"test\" | \"regtest\"\n"
++                "height: block height to evaluate at\n"
++                "decide: arg4=present(0|1), arg5=commitment hex\n");
++
++        std::string mode = request.params[0].get_str();
++        std::string net = request.params[1].get_str();
++        uint32_t height = (uint32_t)getInt(request.params[2]);
++        LitenyxTopoActivation act = LitenyxTopoActivationForNetwork(net);
++
++        if (mode == "regime") {
++            UniValue out(UniValue::VOBJ);
++            out.pushKV("regime", regimeName(act.RegimeAt(height)));
++            return out;
++        }
++
++        LitenyxTopologyState expected = LitenyxCalculateExpectedTopologyFromChain(
++            LitenyxTopologyState::Genesis(), buildChain(height), height);
++
++        if (mode == "expected") {
++            UniValue out(UniValue::VOBJ);
++            out.pushKV("commitment",
++                       LitenyxExpectedTopologyCommitment(expected).GetHex());
++            out.pushKV("nChains", (int)expected.nN);
++            return out;
++        } else if (mode == "decide") {
++            if (request.params.size() < 5)
++                throw JSONRPCError(RPC_INVALID_PARAMETER,
++                                   "decide requires present(0|1) and commitment hex");
++            bool present = getInt(request.params[3]) != 0;
++            uint256 carried = uint256S(request.params[4].get_str().c_str());
++            LitenyxCommitVerdict v = LitenyxVerifyTopologyCommitment(
++                act.RegimeAt(height), present, carried, expected);
++            UniValue out(UniValue::VOBJ);
++            const char* vs = (v == LitenyxCommitVerdict::Valid) ? "valid"
++                           : (v == LitenyxCommitVerdict::AdvisoryMismatch) ? "advisory_mismatch"
++                           : "invalid";
++            out.pushKV("verdict", vs);
++            out.pushKV("regime", regimeName(act.RegimeAt(height)));
++            return out;
++        } else {
++            throw JSONRPCError(RPC_INVALID_PARAMETER,
++                               "unknown mode (regime|expected|decide)");
++        }
++    } catch (const std::exception& e) {
++        throw JSONRPCError(RPC_MISC_ERROR, std::string("LITENYX-topoauthority: ") + e.what());
 +    }
 +}
 +

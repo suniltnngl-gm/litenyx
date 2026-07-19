@@ -17,6 +17,10 @@
 //   C2 VerifyTopologyCommitment regime matrix; zero-commitment != absence.
 //   C3 presence is STRUCTURAL (magic == V2), not zero-sentinel; predicates.
 //   C4 wire framing: V0/V1 byte-identical (56B), V2 +32B (88B), offset boundary.
+//   D1 enforcement boundary matrix: H_derive-1/H_derive/H_topology-1/H_topology.
+//   D2 disabled/mainnet network dormant at all heights.
+//   D3 network selector maps net strings to frozen activations.
+//   D4 enforcement path-independent (IBD==sequential==disconnect/reconnect).
 
 #include <litenyx/LITENYX_topology_authority.h>
 #include <litenyx/LITENYX_topology.h>
@@ -595,6 +599,129 @@ BOOST_AUTO_TEST_CASE(auxheader_wire_framing_versioned)
     // The trailing 32 bytes of V2 are exactly the frozen commitment.
     uint256 tail; for (int i = 0; i < 32; ++i) tail.data[i] = b2[kAuxPrefixLen + i];
     BOOST_CHECK(tail == v2.topologyCommitment);
+}
+
+// D-series (Phase 4B(4)): the ENFORCEMENT DECISION — regime(height) → derive
+// expected from canonical chain → pure VerifyTopologyCommitment. This mirrors,
+// in pure form, exactly what LitenyxCheckTopologyCommitment does in ConnectBlock
+// (which additionally reads CBlock/CBlockIndex). Deciding the verdict here proves
+// the consensus semantics at the exact activation boundaries without a daemon.
+
+namespace {
+// Reproduce the enforcement decision purely: build the canonical block vector to
+// `height`, derive expected T_h, and verify the carried commitment for `magicV2`.
+LitenyxCommitVerdict DecideAt(const LitenyxTopoActivation& act,
+                              uint32_t height,
+                              const std::vector<LitenyxCommittedBlock>& chain,
+                              bool presentV2,
+                              const uint256& carried)
+{
+    LitenyxTopoRegime regime = act.RegimeAt(height);
+    LitenyxTopologyState expected = LitenyxCalculateExpectedTopologyFromChain(
+        LitenyxTopologyState::Genesis(), chain, height);
+    return LitenyxVerifyTopologyCommitment(regime, presentV2, carried, expected);
+}
+// Canonical chain of `n` blocks all on chain 0 at half weight (deterministic).
+std::vector<LitenyxCommittedBlock> Chain(uint32_t n) {
+    std::vector<LitenyxCommittedBlock> v(n);
+    for (auto& b : v) { b.chainId = 0; b.blockWeight = LITENYX_MAX_BLOCK_WEIGHT / 2; }
+    return v;
+}
+} // namespace
+
+// D1: exact activation boundaries H_derive-1 / H_derive / H_topology-1 / H_topology.
+BOOST_AUTO_TEST_CASE(enforcement_boundary_matrix)
+{
+    using V = LitenyxCommitVerdict;
+    const LitenyxTopoActivation act = LitenyxTopoActivationRegtest(); // 100 / 300
+    const uint32_t Hd = 100, Ht = 300;
+
+    // Regime edges are strict: [<Hd)=Pre, [Hd,Ht)=Soft, [>=Ht)=Hard.
+    BOOST_CHECK(act.RegimeAt(Hd - 1) == LitenyxTopoRegime::PreDerivation);
+    BOOST_CHECK(act.RegimeAt(Hd)     == LitenyxTopoRegime::SoftAdvisory);
+    BOOST_CHECK(act.RegimeAt(Ht - 1) == LitenyxTopoRegime::SoftAdvisory);
+    BOOST_CHECK(act.RegimeAt(Ht)     == LitenyxTopoRegime::HardAuthority);
+
+    auto chain = Chain(Ht + 1);
+    auto correctAt = [&](uint32_t h) {
+        return LitenyxExpectedTopologyCommitment(
+            LitenyxCalculateExpectedTopologyFromChain(
+                LitenyxTopologyState::Genesis(), chain, h));
+    };
+    uint256 zero; zero.SetNull();
+
+    // H_derive-1 (PreDerivation): absent OK; a present V2 commitment is premature.
+    BOOST_CHECK(DecideAt(act, Hd - 1, chain, false, zero) == V::Valid);
+    BOOST_CHECK(DecideAt(act, Hd - 1, chain, true, correctAt(Hd - 1)) == V::Invalid);
+
+    // H_derive (SoftAdvisory): absent OK; correct OK; wrong -> advisory (accept).
+    BOOST_CHECK(DecideAt(act, Hd, chain, false, zero) == V::Valid);
+    BOOST_CHECK(DecideAt(act, Hd, chain, true, correctAt(Hd)) == V::Valid);
+    { uint256 w = correctAt(Hd); w.data[0] ^= 0xFF;
+      BOOST_CHECK(DecideAt(act, Hd, chain, true, w) == V::AdvisoryMismatch); }
+
+    // H_topology-1 (still Soft): missing must NOT be fatal.
+    BOOST_CHECK(DecideAt(act, Ht - 1, chain, false, zero) == V::Valid);
+
+    // H_topology (HardAuthority): absent -> Invalid; correct -> Valid; wrong ->
+    // Invalid; present-but-zero -> Invalid (present != absent).
+    BOOST_CHECK(DecideAt(act, Ht, chain, false, zero) == V::Invalid);
+    BOOST_CHECK(DecideAt(act, Ht, chain, true, correctAt(Ht)) == V::Valid);
+    { uint256 w = correctAt(Ht); w.data[0] ^= 0xFF;
+      BOOST_CHECK(DecideAt(act, Ht, chain, true, w) == V::Invalid); }
+    BOOST_CHECK(DecideAt(act, Ht, chain, true, zero) == V::Invalid);
+}
+
+// D2: disabled/mainnet network stays PreDerivation at ALL heights (dormant).
+BOOST_AUTO_TEST_CASE(enforcement_disabled_network_dormant)
+{
+    using V = LitenyxCommitVerdict;
+    const LitenyxTopoActivation act = LitenyxTopoActivationMainnet(); // disabled
+    BOOST_CHECK(act.IsDisabled());
+    auto chain = Chain(1000);
+    uint256 zero; zero.SetNull();
+    // Even far past any height, absent is valid and a present commitment is
+    // premature (rejected) — never enforced, never required.
+    BOOST_CHECK(DecideAt(act, 100000, chain, false, zero) == V::Valid);
+    BOOST_CHECK(DecideAt(act, 100000, chain, true, zero) == V::Invalid);
+}
+
+// D3: network selector maps net strings to the frozen activations.
+BOOST_AUTO_TEST_CASE(enforcement_network_selector)
+{
+    BOOST_CHECK(LitenyxTopoActivationForNetwork("regtest").RegimeAt(300) == LitenyxTopoRegime::HardAuthority);
+    BOOST_CHECK(LitenyxTopoActivationForNetwork("test").RegimeAt(300) == LitenyxTopoRegime::PreDerivation);
+    BOOST_CHECK(LitenyxTopoActivationForNetwork("test").RegimeAt(1500) == LitenyxTopoRegime::HardAuthority);
+    BOOST_CHECK(LitenyxTopoActivationForNetwork("main").IsDisabled());
+    BOOST_CHECK(LitenyxTopoActivationForNetwork("unknown-net").IsDisabled()); // fail dormant
+}
+
+// D4: enforcement is PATH-INDEPENDENT — deciding at height h gives the SAME
+// verdict whether the chain was reconstructed in one shot (IBD) or the expected
+// state was reached incrementally. Reconstruction is a pure function of the
+// canonical block SET up to h, so no process-local state can change acceptance.
+BOOST_AUTO_TEST_CASE(enforcement_path_independent)
+{
+    using V = LitenyxCommitVerdict;
+    const LitenyxTopoActivation act = LitenyxTopoActivationRegtest();
+    auto chain = Chain(500);
+
+    for (uint32_t h : {100u, 200u, 300u, 400u, 500u}) {
+        uint256 correct = LitenyxExpectedTopologyCommitment(
+            LitenyxCalculateExpectedTopologyFromChain(
+                LitenyxTopologyState::Genesis(), chain, h));
+        // A longer chain vector must not change the derivation AT h (only heights
+        // <= h contribute), proving disconnect/reconnect + IBD equivalence.
+        auto chainLonger = Chain(900);
+        uint256 correct2 = LitenyxExpectedTopologyCommitment(
+            LitenyxCalculateExpectedTopologyFromChain(
+                LitenyxTopologyState::Genesis(), chainLonger, h));
+        BOOST_CHECK(correct == correct2);
+        // And the verdict is stable.
+        V a = DecideAt(act, h, chain, act.RegimeAt(h) != LitenyxTopoRegime::PreDerivation, correct);
+        V b = DecideAt(act, h, chainLonger, act.RegimeAt(h) != LitenyxTopoRegime::PreDerivation, correct2);
+        BOOST_CHECK(a == b);
+    }
 }
 
 // A10: activation semantics (spec §8) — regimes, disabled sentinel, validity.

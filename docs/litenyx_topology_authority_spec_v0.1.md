@@ -485,26 +485,46 @@ regime + expected hash. Outcome table (matches §8/§9):
 | Hard / authoritative | **Invalid** | Valid | **Invalid** |
 
 The daemon maps `Valid → accept`, `Invalid → return false`, `AdvisoryMismatch →
-log only`. This 4B(3) deliverable is PURE; wiring the verdict into `ConnectBlock`
-is 4B(4) (§6, §13).
+log only`. The pure verifier is 4B(3); the `ConnectBlock` wiring is **4B(4)**
+(§6), implemented by `LitenyxCheckTopologyCommitment` as thin glue over this
+verifier — the daemon duplicates NO topology or hash logic.
 
 ---
 
-## 6. Validation order (`ConnectBlock`)
+## 6. Validation order (`ConnectBlock`) — ENFORCEMENT LIVE (Phase 4B(4))
 
 The authoritative topology check is inserted with a STRICT ordering so it fails
-closed and never depends on observational state:
+closed and never depends on observational state. Implemented as the single
+consensus-critical call `LitenyxCheckTopologyCommitment(block, prev, netId,
+consensus, state)` placed immediately AFTER `LitenyxConnectSharedState` and
+OUTSIDE any `try/catch`:
 
 ```
 1. (existing Dogecoin) contextual + script checks
 2. LitenyxCheckAuxHeader(block, prev)              → false on failure
 3. LitenyxConnectSharedState(block)                → false on failure   (Phase 2)
-4. T_h = CalculateExpectedTopology(T_{h-1}, C_h)   → pure, no I/O
-5. VerifyTopologyCommitment(block, T_h)            → false on mismatch  (Phase 4)
-6. (FUTURE) chainId lifecycle enforcement using T_h
-7. persist/index T_h for this block                (deterministic rollback)
-8. LitenyxTopologyTracker::Observe()/Tick()        → catch(...) contained (telemetry)
+4. LitenyxCheckTopologyCommitment(...)             → false on Invalid   (Phase 4B(4))
+     4a. regime = LitenyxTopoActivationForNetwork(netId).RegimeAt(h)
+     4b. T_h    = CalculateExpectedTopologyFromChain(genesis, canonicalBlocks, h)
+                  (canonical chain ALONE — walks pindexPrev, never the tracker)
+     4c. verdict = VerifyTopologyCommitment(regime, present, commitment, T_h)
+     4d. Valid → continue; AdvisoryMismatch → log + continue; Invalid → return false
+5. (FUTURE) chainId lifecycle enforcement using T_h
+6. LitenyxTopologyTracker::Observe()/Tick()        → catch(...) contained (telemetry)
 ```
+
+Step 4 is consensus-critical: NO `try/catch` wraps it (only the soft-regime
+advisory *log* is failure-contained). It creates NO process-local topology
+state, so `DisconnectBlock` needs no topology undo for consensus correctness —
+reorg rollback is automatic because re-derivation reads only the (new) canonical
+prefix. PreDerivation / disabled networks preserve legacy behavior. Reconstruction
+uses present block bodies for Phase 4B (full nodes); the pruning-safe `CBlockIndex`
+metadata (§5.6) remains a pre-mainnet requirement (mainnet is DISABLED).
+
+> Scope note: producing V2-commitment blocks (miner setting `nyx_aux` V2 + the
+> derived commitment) is a SEPARATE block-production concern, not part of 4B(4)
+> enforcement. 4B(4) proves the consensus DECISION at every boundary via the
+> `testlitenyxtopoauthority` regtest RPC + the C++ D-series proofs.
 
 Steps 4–5 are consensus-critical: NO `try/catch` may wrap them. Step 8 (the
 Phase-3 tracker) remains inside its observational `catch(...)` boundary.
