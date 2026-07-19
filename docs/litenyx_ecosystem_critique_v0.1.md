@@ -1370,3 +1370,182 @@ choice prematurely prescribed.
 Live OPEN design boundaries now carried forward: SSC-OPEN-1 (== PR-OPEN-1),
 DA-OPEN-1, XCT-OPEN-1, XCT-OPEN-2, ATMP-OPEN-1, ATMP-OPEN-2. Next: continue outward
 (RPC surface / daemon integration) as directed.
+
+# Component 10 — RPC Surface
+
+**Central question:** Does every Litenyx RPC remain an inspection/test interface
+over canonical authority, without becoming a mutation path, alternate authority
+source, or consensus dependency?
+
+```
+RPCObservation ≠ ConsensusAuthority
+```
+
+**Verdict — split three ways (after daemon-framework verification):**
+
+```
+P4/P5/P6 Authority RPCs   : Exemplary inspection/test
+TopologyTracker Mutators  : Operational / advisory risk
+SharedSpendSet Mutators   : LOCAL consensus-state integrity risk (ungated)
+```
+
+## Daemon-framework gating verification (decisive precondition)
+
+The base daemon is NOT vendored; it is cloned at build time from
+`github.com/dogecoin/dogecoin` (`deploy/Makefile:44`, `--depth 1`). Its RPC
+dispatch is standard Bitcoin/Litecoin-lineage `rpc/server.cpp`. Verified behavior
+of the generic framework:
+
+- The `CRPCCommand` `okSafeMode` field (set `true` for all 5 litenyx RPCs,
+  `litenyx-rpc.patch:38-42`) is a PERMISSIVENESS flag ("allowed during safe
+  mode"), NOT a network restriction.
+- The RPC category (`"litenyx"`) is a `help`-grouping label with NO dispatch-gating
+  effect.
+- In this lineage, regtest-restricted methods enforce it INSIDE the RPC body
+  (explicit `Params().MineBlocksOnDemand()` / network check). There is NO generic
+  registration-level "test command -> regtest-only" gate.
+
+The litenyx RPC bodies contain NO such runtime check: `Params()` appears only in
+`litenyx-validation.patch`, never in `litenyx-rpc.patch`. Therefore the decisive
+question resolves:
+
+```
+A non-regtest daemon CAN dispatch the mutating Litenyx RPC methods.
+```
+
+The Python harness invokes them only under `-regtest`
+(`tests/regtest/test_litenyx_splitmerge.py`), but that is TEST CONVENTION, not
+enforcement. Per the maturity rule (configuration convention < consensus-adjacent
+safety boundary), the mutators are treated as UNGATED. F-RPC-1 is retained.
+
+## Deliverable 1 — Per-RPC classification
+
+```
+read-only inspection  |  regtest/test driver  |  state mutation  |  production operational
+```
+
+| RPC (mode) | Class | Consensus fns? | Local state | Path to `ConnectBlock`? |
+| --- | --- | --- | --- | --- |
+| `testlitenyxsharedstate query` | read-only inspection | yes (`IsSharedSpent`/`ConfirmingChain`) | reads real singleton | no (read) |
+| `testlitenyxsharedstate record`/`revert` | STATE MUTATION | yes (`Record`/`RevertSharedSpend`) | MUTATES real global spent-set | **YES — writes the exact set `ConnectBlock` consumes** |
+| `testlitenyxtopology status` | read-only inspection | yes (tracker) | reads advisory singleton | no |
+| `testlitenyxtopology observe`/`tick`/`reset` | STATE MUTATION | yes (`Observe`/`Tick`/`Reset`) | MUTATES advisory tracker | advisory only (non-consensus, Component 2) |
+| `testlitenyxtopoauthority regime/expected/decide` | regtest/test driver | yes (pure engine) | NONE | no (pure, synthetic chain) |
+| `testlitenyxlifecycle regime/expected/decide` | regtest/test driver | yes (pure engine) | NONE | no |
+| `testlitenyxexecauthority regime/resolve/resolveid` | regtest/test driver | yes (pure engine + adapter) | NONE | no |
+
+The three AUTHORITY RPCs (Phase 4/5/6) are exemplary: they drive the SAME compiled
+functions `ConnectBlock` uses, over a synthetic canonical chain, with NO
+process-local state — true inspection/test surfaces that cannot feed consensus.
+
+## Deliverable 2 — Load-bearing invariant, tested per class
+
+```
+RPCObservation ≠ ConsensusAuthority
+```
+
+- **HOLDS** for P4/5/6 authority RPCs (pure, stateless, synthetic input).
+- **HOLDS in consensus terms** for topology mutators — only because the tracker is
+  advisory (Component 2). Does NOT hold in operator-perception terms (RPC-OPEN-2).
+- **VIOLATED locally** by sharedstate `record`/`revert`: they mutate the REAL
+  consensus-relevant global spent-set, with no runtime gate. Global protocol
+  consensus RULES are unchanged, but a single node's acceptance BEHAVIOR can be
+  perturbed:
+
+```
+RPCMutation -> SharedSpendSet -> ConnectBlockDecision
+```
+
+An accidental or malicious `record` can cause a node to reject an otherwise-valid
+block (outpoint appears already globally spent); a `revert` can drop a spend
+canonical history says is recorded — until state happens to be repaired by
+subsequent canonical activity. This is a LOCAL consensus-state integrity risk,
+strictly more serious than the advisory-tracker mutators, and classified
+separately.
+
+## Findings
+
+### F-RPC-1 (FINDING, RETAINED — no runtime network gate)
+All 5 RPCs are "regtest-only" IN COMMENTS ONLY. No runtime guard
+(`Params().NetworkIDString()` / `MineBlocksOnDemand()`) exists in any body; the
+generic Dogecoin framework imposes none via registration/category/`okSafeMode`.
+On a main/test daemon these methods are dispatchable.
+
+### F-RPC-2 (FINDING — mutators reachable via RPC)
+The Component-2 `Reset()` trapdoor is RPC-reachable (`testlitenyxtopology reset`),
+as are `observe`/`tick` and sharedstate `record`/`revert`. Tracker impact is
+advisory; `record`/`revert` transiently desynchronize the live spent-set from
+canonical history between blocks (see the LOCAL integrity risk above).
+
+### F-RPC-3 (FINDING, GOOD — claimed vs. authoritative presentation)
+`testlitenyxexecauthority resolve` surfaces BOTH the asserted lane AND the
+authoritative `chainId`/`laneId` from `L_h` (`litenyx-rpc.patch:490-491`), never
+presenting the claimed lane as authority. Correct discipline; preserve it.
+
+### F-RPC-4 (FINDING — advisory tracker mistakable for canonical topology)
+`testlitenyxtopology status` returns `nChains`/`lastTransition` from the ADVISORY
+tracker, while canonical topology is the pure re-derivation
+(`testlitenyxtopoauthority expected`). Naming does not signal the advisory vs.
+canonical distinction; an operator could read advisory `nChains` as canonical
+`N_h`.
+
+## OPEN questions
+
+### RPC-OPEN-1 (production gating contract)
+> Before any non-regtest deployment, what gating guarantees the mutating RPCs
+> (`testlitenyxsharedstate record/revert`, `testlitenyxtopology
+> observe/tick/reset`) are UNREACHABLE — a runtime regtest guard, compile-time
+> exclusion (`#ifdef`), or removal — so no operator/RPC action can write
+> consensus-relevant singleton state on main/test?
+
+### RPC-OPEN-2 (advisory/canonical presentation contract)
+> What RPC-response/naming contract ensures advisory tracker state (`nChains`) can
+> never be read as canonical topology (`N_h`) — e.g. explicit `"advisory": true` /
+> `"source": "tracker|canonical"` fields?
+
+**No-go constraints:**
+
+- **RPC-NOGO-1** — no RPC result may become an input to `ConnectBlock` authority;
+  canonical re-derivation stays the sole source (extends PR-NOGO-2).
+- **RPC-NOGO-2** — inspection RPCs MUST NOT present a CLAIMED lane/identity as
+  authoritative (preserve F-RPC-3).
+- **RPC-NOGO-3** — a "regtest-only" designation MUST be enforced at
+  runtime/compile time, NEVER by comment/convention alone (closes F-RPC-1).
+
+## Guardrails (doctrine-level)
+
+- **G-RPC-1** — Litenyx RPCs are read-only by default; any mutator is gated
+  (runtime or compile-time) to regtest (maps RPC-NOGO-3, RPC-OPEN-1).
+- **G-RPC-2** — no RPC output feeds `ConnectBlock`; consensus stays
+  re-derivation-only (maps RPC-NOGO-1).
+- **G-RPC-3** — advisory state is explicitly labelled advisory in every response
+  (maps RPC-OPEN-2, F-RPC-4).
+- **G-RPC-4** — authoritative vs. claimed identity/lane is always distinguished in
+  output (maps RPC-NOGO-2, preserves F-RPC-3).
+- **G-RPC-EXT-1 (external dependency)** — the daemon RPC framework provides NO
+  network gate for these commands; the gate MUST be added by Litenyx (do not rely
+  on `okSafeMode`/category/harness convention).
+
+## Disposition
+
+```
+P4/P5/P6 Authority RPCs: Exemplary | TopologyTracker Mutators: Operational/advisory | SharedSpendSet Mutators: LOCAL consensus-state integrity risk (ungated)
+```
+
+The authority RPCs are model inspection surfaces (same engine, synthetic input, no
+local state, cannot feed consensus) — `RPCObservation ≠ ConsensusAuthority` holds
+cleanly for them. Daemon-framework verification confirms NO generic gating, so the
+mutating RPCs are genuinely reachable outside regtest: the topology mutators are an
+operational/advisory risk, and the SharedSpendSet mutators are a LOCAL
+consensus-state integrity risk (RPCMutation -> SharedSpendSet ->
+ConnectBlockDecision). None alter global protocol consensus rules or create an
+alternate authority source. Recorded: F-RPC-1..4, RPC-OPEN-1/2, RPC-NOGO-1..3,
+G-RPC-1..4 + G-RPC-EXT-1. No frozen invariant reopened.
+
+Live OPEN design boundaries now carried forward: SSC-OPEN-1 (== PR-OPEN-1),
+DA-OPEN-1, XCT-OPEN-1, XCT-OPEN-2, ATMP-OPEN-1, ATMP-OPEN-2, RPC-OPEN-1, RPC-OPEN-2.
+Next: Component 11 — Daemon Integration (production composition:
+ConnectBlock -> SharedState -> TopologyAuthority -> LifecycleAuthority ->
+ExecutionAuthority -> RemainingValidation; rejection atomicity, ordering, disconnect
+symmetry, activation boundaries, fail-closed reconstruction, intentional Phase-7
+hook absence).
