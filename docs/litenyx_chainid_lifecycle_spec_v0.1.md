@@ -40,9 +40,22 @@ Phase 5  ChainId Authority
 
 ### 0.1 Terminology reconciliation (FROZEN)
 
-The value Phase 4 serializes as an element of `TopologyState.activeChainIds` is,
-for Phase 5 purposes, a **`TopologyLaneId`** (a *position*). Phase 4 code and
-serialization are NOT renamed or changed; this is a conceptual clarification.
+A **`TopologyLaneId`** is an active execution *position* in the current topology.
+Phase 4 code and serialization are NOT renamed or changed; this is a conceptual
+clarification.
+
+> **Frozen-engine representation (NORMATIVE, LOCKED).** The frozen Phase-4
+> authority engine represents active topology by the scalar
+> `LitenyxTopologyState::nN` (active lane count) ONLY — it does NOT store an
+> explicit `activeChainIds` list. For Phase 5, the authoritative active
+> `TopologyLaneId` set is canonically the contiguous prefix:
+> `ActiveTopologyLanes(T_h) := { 0, 1, ..., T_h.nN - 1 }`.
+> Phase-4 spec references to `activeChainIds`, "lowest unused," and "highest
+> active" are descriptive abstractions; under the frozen contiguous-prefix
+> invariant they are EQUIVALENT to activating lane `nN` on split and retiring lane
+> `nN-1` on merge (`LitenyxTopoApply` moves `nN` by exactly `+/-1`). **Phase 5
+> consumes `T_{h-1}.nN → T_h.nN` as authoritative; it never invents an
+> `activeChainIds` field.** No `phase4-green` code/consensus change.
 
 | Term | Owner | Domain | Recycling | Meaning |
 |------|-------|--------|-----------|---------|
@@ -177,9 +190,11 @@ but MUST NOT reuse a `ChainId`. The lifecycle therefore binds the full active
 canonical history.
 
 **Consistency invariants (NORMATIVE, checked at derivation and validation):**
-- `activeBindings` LaneId set == `T_h.activeChainIds` (the Phase-4 lane set).
-  Phase 5 active identity is a *relabeling* of the frozen Phase-4 lane set, never
-  a different cardinality.
+- `activeBindings` LaneId set == `ActiveTopologyLanes(T_h) = {0..T_h.nN-1}` (§0.1)
+  — i.e. exactly the contiguous prefix of size `T_h.nN`. Phase 5 active identity
+  is a *relabeling* of the frozen Phase-4 lane set, never a different cardinality.
+  Equivalently: `len(activeBindings) == T_h.nN` and the bound LaneIds are
+  `0..T_h.nN-1`.
 - Every `ChainId` in `activeBindings` is `< nextChainId`.
 - `activeBindings` is sorted ascending by `LaneId`; each `LaneId` appears once.
 - `nextChainId` is monotonic non-decreasing across `h`.
@@ -240,16 +255,18 @@ Ascending-by-`LaneId` ordering guarantees a single canonical encoding.
 ## 4. Authoritative lifecycle function `G` (pure)
 
 ```text
-L_h = G(L_{h-1}, T_{h-1}, T_h, h)
+L_h = G(L_{h-1}, T_{h-1}.nN, T_h.nN, h)
 ```
 
 - `L_{h-1}` is the authoritative lifecycle committed by the parent block.
-- `T_{h-1}`, `T_h` are the FROZEN Phase-4 topology states (topology spec §3/§4).
+- `T_{h-1}.nN`, `T_h.nN` are the FROZEN Phase-4 active-lane counts (§0.1). `G`
+  consumes ONLY these scalars (the active lane set is the derived prefix
+  `[0, nN)`); it never reads a non-existent `activeChainIds` field.
 
 ### 4.0 Genesis `L_0` (FROZEN)
 
 `L_0` is the identity relabeling of the FROZEN Phase-4 genesis topology `T_0`
-(topology spec §4: `nChains = MIN_CHAINS`, `activeChainIds = {0 .. MIN_CHAINS-1}`).
+(topology spec §4: `nChains = MIN_CHAINS`; active lanes `{0 .. MIN_CHAINS-1}`).
 The identity map is used at genesis (lane `i → ChainId i`):
 
 ```text
@@ -274,22 +291,25 @@ L_0 = { nVersion=1, nextChainId=2,
 > (§3.3), ChainIds `{0,1}` are Active and `nextChainId=2` marks all `>= 2` as
 > Nonexistent at genesis.
 
-`G` is pure: `G(L_{h-1}, T_{h-1}, T_h, h)` always yields the same `L_h`. It:
+`G` is pure: `G(L_{h-1}, N_{h-1}, N_h, h)` (with `N := nN`) always yields the same
+`L_h`. Because `LitenyxTopoApply` moves `nN` by exactly `+/-1`, the delta
+`d = N_h - N_{h-1}` is one of `{-1, 0, +1}`:
 
-1. Computes the lane delta `Δ = T_h.activeChainIds − T_{h-1}.activeChainIds`:
-   - **Added lanes** `A = T_h \ T_{h-1}` (a split activated these lanes).
-   - **Removed lanes** `R = T_{h-1} \ T_h` (a merge retired these lanes).
-2. **Retirement first, then allocation** (deterministic ordering, LOCKED):
-   - For each `lane ∈ R` (ascending): remove `(lane → C)` from `activeBindings`;
-     mark `C` retired permanently. `C` is NEVER returned to `activeBindings`.
-   - For each `lane ∈ A` (ascending): allocate `ChainId = nextChainId`, append
-     `(lane → nextChainId)`, then `nextChainId += 1`.
-3. If `Δ` is non-empty, set `lastLifecycleHeight = h`; otherwise `L_h = L_{h-1}`
-   unchanged.
+1. **`d == 0` (HOLD):** `L_h = L_{h-1}` unchanged.
+2. **`d == +1` (SPLIT — lane `N_{h-1}` activates):**
+   - allocate `ChainId = nextChainId`; append `(lane N_{h-1} → nextChainId)`;
+     `nextChainId += 1`; set `lastLifecycleHeight = h`.
+3. **`d == -1` (MERGE — lane `N_{h-1}-1 = N_h` retires):**
+   - remove `(lane N_h → C)` from `activeBindings`; mark `C` retired permanently
+     (`C` is NEVER returned to `activeBindings`; `nextChainId` UNCHANGED);
+     set `lastLifecycleHeight = h`.
+4. Any other `d` (magnitude `> 1`), or a resulting state violating §3/§3.2/§3.3,
+   is REJECTED (§4.1) — fail closed.
 
-> **Allocation determinism (LOCKED).** When a single boundary adds multiple
-> lanes, ChainIds are allocated in ascending-`LaneId` order. This makes the
-> `LaneId → ChainId` assignment a pure function of the topology delta.
+> **Allocation determinism (LOCKED).** A SPLIT activates exactly lane `N_{h-1}`
+> and binds it to `nextChainId`; a MERGE retires exactly lane `N_h`. The
+> `LaneId → ChainId` assignment is thus a pure function of the `nN` delta, with no
+> set-difference logic required.
 
 > **No standalone creation/retirement.** In v0.1, ChainId creation and retirement
 > occur ONLY as a consequence of a Phase-4 lane activation/retirement. There is
@@ -298,22 +318,21 @@ L_0 = { nVersion=1, nextChainId=2,
 
 ### 4.1 Impossible / malformed transitions — `G` REJECTS, never repairs
 
-`G` consumes an AUTHORITATIVE `T_{h-1} → T_h` delta. It MUST NOT infer intent or
+`G` consumes AUTHORITATIVE `N_{h-1} → N_h` scalars. It MUST NOT infer intent or
 silently repair a delta inconsistent with the FROZEN Phase-4 transition rules
-(topology spec §4: at most one split OR one merge per observation boundary; a
-split adds one lane, a merge removes one lane; `MIN_CHAINS <= N <= TOPO_MAX_CHAINS`).
-A delta that cannot arise from the frozen `F` is a CONSENSUS FAILURE, surfaced as
-an invalid lifecycle (§9), not absorbed:
+(topology spec §4; `LitenyxTopoApply` moves `nN` by exactly `+/-1`;
+`MIN_CHAINS <= nN <= TOPO_MAX_CHAINS`). A delta that cannot arise from the frozen
+`F` is a CONSENSUS FAILURE, surfaced as an invalid lifecycle (§9), not absorbed:
 
 > **`G` MUST reject (fail closed) when:**
-> - both `A` and `R` are non-empty (a boundary cannot both split and merge);
-> - `|A| > 1` or `|R| > 1` (Phase-4 transitions move exactly one lane);
-> - a change occurs at a NON-boundary height (`Δ` non-empty while
+> - `|N_h - N_{h-1}| > 1` (Phase-4 moves `nN` by at most one per boundary);
+> - `N_{h-1}` or `N_h` is outside `[MIN_CHAINS, TOPO_MAX_CHAINS]`;
+> - a change occurs at a NON-boundary height (`d != 0` while
 >   `h % OBS_WINDOW != 0`);
-> - an added lane is already bound in `activeBindings`, or a removed lane is
->   absent from `activeBindings`;
-> - the resulting active lane set `!= T_h.activeChainIds` (§3 coherence);
-> - `|T_h.activeChainIds|` is outside `[MIN_CHAINS, TOPO_MAX_CHAINS]`.
+> - the resulting `len(activeBindings) != N_h`, or the bound LaneIds are not
+>   exactly `{0..N_h-1}` (§3 coherence);
+> - on MERGE, lane `N_h` is not currently bound (internal inconsistency);
+> - the result violates bijection (L1, §3.2) or dense allocation (L2, §3.3).
 >
 > Because `T_h` is itself the frozen-Phase-4 authoritative state that already
 > passed the topology commitment check (§6.2 ordering), these conditions cannot
@@ -501,7 +520,8 @@ The following are CONSENSUS-INVALID and MUST propagate `return false`:
 2. **Malformed lifecycle commitment** (bad length / version / unsortable
    bindings / `ChainId >= nextChainId` in `activeBindings`).
 3. **Incorrect lifecycle**: `commitment != LifecycleStateHash(G(...))`.
-4. **Lane/identity divergence**: `activeBindings` LaneId set `!= T_h.activeChainIds`.
+4. **Lane/identity divergence**: `activeBindings` LaneId set `!= {0..T_h.nN-1}`
+   (i.e. `len(activeBindings) != T_h.nN`).
 5. **Invalid execution context**: any asserted `chainId` that is not a valid
    active execution domain per §5.1 (not-yet-created, retired, or malformed).
 6. **Non-monotonic `nextChainId`** or a recycled `ChainId` (violates L0).
@@ -509,8 +529,9 @@ The following are CONSENSUS-INVALID and MUST propagate `return false`:
    ChainId bound to two lanes.
 8. **Sparse/skipped allocation** (violates L2): a hole in `[0, nextChainId)` that
    is neither active nor accountably retired.
-9. **Impossible topology delta** consumed by `G` (§4.1): dual split+merge,
-   multi-lane move, non-boundary change, or lane-set incoherence with `T_h`.
+9. **Impossible topology delta** consumed by `G` (§4.1): `|N_h - N_{h-1}| > 1`,
+   `nN` out of `[MIN_CHAINS, TOPO_MAX_CHAINS]`, non-boundary change, or
+   `len(activeBindings) != N_h`.
 10. **Allocation exhaustion** (violates L3, §5.3): a required allocation with
     `nextChainId == UINT32_MAX`. Fail closed; never wrap, never recycle.
 
@@ -530,7 +551,7 @@ required proofs:
    retired ChainIds never return to `activeBindings`; `nextChainId` strictly
    increases at each allocation.
 3. **Lane/identity coherence**: at every `h`, `activeBindings` LaneId set equals
-   the frozen Phase-4 `T_h.activeChainIds`.
+   the contiguous prefix `{0..T_h.nN-1}` (§0.1).
 4. **Boundary semantics (§5.2)**: a ChainId activated at boundary `h` is valid
    in block `h`; a ChainId retired at boundary `h` is invalid in block `h`.
 5. **Fail-closed matrix (§5.1)**: valid-active accepted; not-yet-created,
