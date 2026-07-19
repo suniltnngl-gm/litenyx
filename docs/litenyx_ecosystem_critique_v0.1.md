@@ -1082,3 +1082,143 @@ proposed mechanism elevated to principle.
 Live OPEN design boundaries now carried forward: SSC-OPEN-1, DA-OPEN-1, XCT-OPEN-1,
 XCT-OPEN-2. Next: continue outward (e.g. RPC surface / mempool-ATMP boundary /
 daemon integration) as directed.
+
+# Component 8 — Mempool / ATMP Boundary
+
+**Nature of this component.** Second step outward. The subject is the
+pre-consensus transaction-admission path (ATMP / mempool) and whether it enforces
+or safely anticipates the authority the canonical `ConnectBlock` path ultimately
+enforces — without becoming an independent source of consensus truth.
+
+**Central question:** Does pre-consensus transaction admission enforce or safely
+anticipate the same authority constraints that ConnectBlock ultimately enforces,
+without becoming an independent source of consensus truth?
+
+**Verdict — three-part:**
+
+```
+ATMP Authority Hook: ABSENT | Consensus Safety: PRESERVED | Early Authority Filtering: OPEN
+```
+
+**Key architectural result:** Litenyx currently has LATE canonical enforcement
+without pre-consensus authority anticipation. Whether early filtering is useful can
+be decided later — after Routing/XCT and transaction semantics exist — without
+weakening the mature rule:
+
+```
+MempoolPolicy ≠ ConsensusAuthority
+```
+
+## Deliverable 1 — Surface classification (reconnaissance)
+
+```
+IMPLEMENTED  |  PARTIAL/SCAFFOLD  |  SPEC-ONLY  |  ABSENT
+```
+
+| Surface | Class | Anchor |
+| --- | --- | --- |
+| ATMP / `AcceptToMemoryPool` litenyx hook | ABSENT | only `DisconnectBlock` + `ConnectBlock` hunks are patched (`deploy/patches/litenyx-validation.patch:14,39`); no ATMP hunk anywhere |
+| Mempool consumption of `PersistentChainId` | ABSENT | no pre-consensus surface reads identity |
+| Mempool consumption of Phase-5 lifecycle status | ABSENT | every engine header declares "NO mempool input" |
+| Mempool consumption of `mayRoute` / `mayBind` | ABSENT | predicates computed only in `ConnectBlock` (`LITENYX_validation.cpp:300`) |
+| Mempool consumption of Phase-7 effective capabilities | ABSENT | Phase-7 engine unhooked entirely (KAT-only) |
+| `txmempool.h` include in validation | INCIDENTAL (core context, not authority) | `litenyx-validation.patch:6` is a context line — pre-existing core include, not a `+` addition |
+| Consensus-purity exclusion of mempool as an authority input | IMPLEMENTED (as a stated invariant) | `execution_authority_spec:95`, `topology_authority_spec:198,276`, `chainid_lifecycle_spec:129` — mempool MUST NOT feed authority |
+
+## Deliverable 2 — Maturity principle: source-confirmed
+
+```
+MempoolPolicy ≠ ConsensusAuthority
+```
+
+Reconnaissance yields the STRONGEST form of this principle: the litenyx mempool
+authority layer does not exist, so it CANNOT be a source of consensus truth. All
+authority is derived exclusively in `ConnectBlock` from committed chain history.
+There is no stale-mempool bypass risk because no mempool decision participates in
+authority at all — the invariant holds vacuously and strongly.
+
+## Central-question resolution (answered by absence)
+
+ATMP neither enforces NOR anticipates the authority constraints — because no
+litenyx ATMP hook exists. This is:
+
+- **Consensus-safe.** The canonical `ConnectBlock` path is the sole, unbypassed
+  authority (Components 3-6). Late canonical enforcement is intact.
+- **Operationally unanticipated (precisely stated).** ATMP has no Litenyx-specific
+  early authority filtering. Therefore, TO THE EXTENT that a future transaction or
+  operation exposes sufficient identity/lane semantics before block construction,
+  invalid or stale authority-targeted operations MAY consume mempool/relay
+  resources before canonical `ConnectBlock` enforcement rejects the resulting
+  execution context. The exact exposure depends on the future
+  transaction/routing/binding format.
+
+**Caveat preserved (do not overclaim).** Because reconnaissance established only
+that ATMP does not CONSUME these authority concepts, we have NOT proven ATMP could
+meaningfully classify every case. In particular, `WrongLane` is a
+block/execution-context property, not necessarily a transaction-admission
+property; some authority outcomes are only knowable at block-validation time.
+
+```
+ATMP admission            relay + retain          ConnectBlock reject
+(no early filtering)  ->  (resource use)     ->   (canonical, late)
+```
+
+Wasted bandwidth, stale-tx accumulation, and DoS pressure are OPERATIONAL
+vulnerabilities, not consensus defects.
+
+## OPEN questions (recorded, not answered)
+
+### ATMP-OPEN-1 (advisory admission policy — scoped to determinable classes)
+> For transaction or operation classes whose authority requirements are
+> determinable from canonical state at admission time, should ATMP apply a
+> read-only advisory projection of the applicable Phase-5/6/7 effective authority
+> to reject clearly inadmissible operations early, strictly as policy?
+
+(Scoping deliberately avoids assuming every future transaction maps directly to
+`mayBind` or `mayRoute`.)
+
+### ATMP-OPEN-2 (the non-authority guarantee)
+> If ATMP-OPEN-1 is pursued, what invariant guarantees the advisory check can only
+> reject MORE conservatively and can NEVER cause acceptance to imply consensus
+> validity, nor let a stale mempool decision bypass `ConnectBlock`?
+
+**No-go constraints:**
+
+- **ATMP-NOGO-1** — mempool acceptance MUST NEVER imply consensus validity
+  (`MempoolPolicy ≠ ConsensusAuthority`).
+- **ATMP-NOGO-2** — a stale/cached mempool authority read MUST NEVER bypass
+  canonical `ConnectBlock` re-derivation (purity invariant I1).
+- **ATMP-NOGO-3** — an advisory ATMP check MUST consume the frozen
+  effective-authority result (XCT-DEP-2 pattern: `P5→P6→P7→eff`), never
+  reconstruct its own weaker permission.
+
+## Guardrails (doctrine-level; no code change; forward-looking)
+
+- **G-ATMP-1** — ATMP filtering, if introduced, is POLICY ONLY; acceptance carries
+  no consensus meaning (maps ATMP-NOGO-1).
+- **G-ATMP-2** — `ConnectBlock` re-derivation is always authoritative; no cached
+  mempool decision may substitute for it (maps ATMP-NOGO-2).
+- **G-ATMP-3** — an advisory check consumes the frozen effective authority; it
+  never reconstructs a private/weaker permission (maps ATMP-NOGO-3).
+- **G-ATMP-4 — Context Availability.** ATMP SHALL NOT invent, predict, or
+  synthesize execution context that is only knowable at block-validation time
+  merely to perform an early authority check. This prevents a future policy layer
+  from fabricating a lane or execution context and accidentally becoming a shadow
+  authority engine.
+
+## Disposition
+
+```
+ATMP Authority Hook: ABSENT | Consensus Safety: PRESERVED | Early Authority Filtering: OPEN
+```
+
+The absence is consensus-correct: the entire authority stack is deliberately
+mempool-independent and `MempoolPolicy ≠ ConsensusAuthority` holds vacuously and
+strongly. The gap is purely operational (early-rejection / DoS-resistance),
+correctly framed as advisory-policy OPEN questions (ATMP-OPEN-1/2) rather than a
+missing authority layer. Recorded: ATMP-OPEN-1/2, ATMP-NOGO-1..3, G-ATMP-1..4. No
+frozen invariant reopened; no proposed mechanism elevated to principle.
+
+Live OPEN design boundaries now carried forward: SSC-OPEN-1, DA-OPEN-1, XCT-OPEN-1,
+XCT-OPEN-2, ATMP-OPEN-1, ATMP-OPEN-2. Next: continue outward (RPC surface /
+persistence-recovery / daemon integration) as directed.
