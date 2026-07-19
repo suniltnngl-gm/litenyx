@@ -246,8 +246,11 @@ without overclaiming.
   C-A (pre-`h` pressure, must first PROVE a determinate reconstructible threshold
   despite cooldown re-evaluation), C-B (no required trigger; consequence-only drain
   under D10), or C-C (new pre-transition signal — necessity proven §1.5, adoption is
-  an escalated new-committed-state decision, DA-NOGO-3). RECOMMEND C-B as the
-  lowest-risk default consistent with the frozen engine, pending a decision.
+  an escalated new-committed-state decision, DA-NOGO-3). **No option is selected.**
+  C-B is a valid architectural DISPOSITION but MUST NOT be recorded as CLOSING
+  DA-OPEN-1: doing so would convert "no canonical trigger currently exists" into a
+  positive doctrine that draining never needs one. All three remain legitimate
+  future choices pending their own justification.
 - **DA-Q2** — If C-A is pursued: is there ANY canonical pre-`h` quantity that
   determines a merge at `h` under the cooldown/fresh-re-evaluation semantics (§1.5)?
   Current analysis says NO; a rigorous impossibility proof (or counterexample) should
@@ -287,8 +290,25 @@ Net: the reconstructibility breakthrough is banked; the unbounded/consequence-on
 nature of drain (D10) is now an EXPLICIT accepted consequence rather than an accident;
 and the true remaining question is a TRIGGER-TIMING choice (C-A / C-B / C-C, DA-Q1),
 not a mechanical reproducibility gap. No frozen surface reopened; no new committed
-state introduced; DA-NOGO-1..3, §4.4.5, D0/D4/D9/D10, G-DA-1..4 all honored. Because
-DA-OPEN-1 is not fully resolved, the Component-7 note that XCT carries DA-OPEN-1 as a
-CONDITIONAL upstream dependency remains in force: XCT design may proceed (drain
-enforcement is intentionally not integrated), but must NOT assume a resolved
-drain-entry trigger.
+state introduced; DA-NOGO-1..3, §4.4.5, D0/D4/D9/D10, G-DA-1..4 all honored.
+
+**Precise disposition (frozen for downstream):**
+
+```
+DA-OPEN-1 = OPEN
+  | Existing-state sufficiency audit          = COMPLETE
+  | Pre-retirement deterministic trigger      = NOT FOUND
+  | Proven result: current P4/P5 canonical state contains NO deterministic
+    pre-retirement MERGE fact, because
+        MERGE_Decision_h  ≡  N_Decrement_h  ≡  Edge_Retirement_h
+    and earlier pressure observations are neither latched nor guaranteed to
+    survive fresh evaluation at h.
+  | C-A / C-B / C-C remain legitimate future choices; NONE selected.
+```
+
+Because DA-OPEN-1 is OPEN (not merely partially resolved), the Component-7 note that
+XCT carries DA-OPEN-1 as a CONDITIONAL upstream dependency remains in force. The
+downstream rule is frozen as: **XCT correctness MUST NOT depend on DA-OPEN-1 being
+resolved** — an XCT consumer may consume an already-established P7 effective
+capability if one exists, but MUST remain correct (using P6-derived effective
+authority) when no drain commitment exists at all.
