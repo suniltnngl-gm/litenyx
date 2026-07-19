@@ -430,3 +430,159 @@ KAT/doctrine not type), F-TA-2 (soft->hard cannot resurrect mismatches — invar
 holds), and F-TA-3 (O(height) reconstruction cost — perf/DoS, not correctness) are
 recorded. Guardrails G-TA-1..3 recorded. No frozen invariant reopened. Proceed to
 Component 4 (ChainId Lifecycle).
+
+---
+
+# Component 4 — ChainId Lifecycle
+
+**Central question:** Is `L_h` a pure, path-independent fold that assigns each
+active lane exactly one PersistentChainId, with permanent retirement and no
+identity reuse?
+
+**Verdict:** YES, with high confidence. The lifecycle fold layers directly on the
+frozen Phase-4 topology fold (semantic N-identity, not a second derivation),
+enforces the contiguous lane domain via a coherence oracle checked before AND
+after every transition, and grounds permanent retirement in monotone `nextChainId`
+plus the L2 status oracle. The critical `LaneReuse permitted / PersistentChainIdReuse
+forbidden` distinction holds by construction. The within-history vs. cross-branch
+`nextChainId` distinction is respected. No frozen invariant is violated.
+
+## Source anchors
+
+- `litenyx/LITENYX_chainid_lifecycle.h:104-123` — `L_h` state
+  `{nVersion, nextChainId, activeBindings[], lastLifecycleHeight}` + `operator==`.
+- `:128-138` — genesis `L_0` (lane i -> ChainId i, `nextChainId = MIN_CHAINS`).
+- `:145-187` — explicit LE serialization + reused frozen SHA256d hash.
+- `:195-210` — `LitenyxLifecycleStateCoherent` (the structural oracle).
+- `:221-274` — `LitenyxAdvanceChainIdLifecycle` (SPLIT/MERGE/HOLD fold G).
+- `:278-293` — `LitenyxChainIdStatus` + `LitenyxClassifyChainId` (L2 oracle).
+- `:344-378` — `LitenyxCalculateExpectedLifecycleFromChain` (canonical fold).
+- `litenyx/LITENYX_validation.cpp:191-256` — enforcement integration.
+
+## Surface 1 — state + serialization + coherence oracle (PASS)
+
+- **Canonical single encoding.** `activeBindings` kept ascending by laneId;
+  serialization is explicit LE with a length byte and per-binding `laneId|chainId`
+  (`:145-176`); hash reuses the frozen Phase-4 SHA256d (same platform-independence
+  guarantee as G-TA surface A).
+- **Coherence oracle is the structural backbone.** `LitenyxLifecycleStateCoherent`
+  enforces, for expected count `Nexp`: `Nexp in [MIN,MAX]`,
+  `len(activeBindings)==Nexp`, `laneId[i]==i` (contiguous `{0..Nexp-1}` ascending),
+  every `chainId < nextChainId` (L2 domain), and chainId uniqueness (L1 bijection)
+  (`:198-208`). This is checked on the incoming state (`:233`) AND on every output
+  (`:246,257,273`) — no transition can produce an incoherent `L_h`.
+
+## Surface 2 — SPLIT/MERGE fold + lane-vs-identity reuse (PASS; ABA foundation)
+
+- **SPLIT** binds the new highest lane `Nprev -> nextChainId`, then `nextChainId++`
+  (`:249-257`). **MERGE** retires exactly lane `Ncur == Nprev-1` (highest active),
+  erases its binding, and leaves `nextChainId UNCHANGED` (`:260-273`).
+- **Decisive `LaneReuse vs. IdentityReuse` check — HOLDS by construction:**
+  a merged lane number can reappear on a later SPLIT, but it is bound to the
+  then-current `nextChainId`, never to the retired ChainId (which is `< nextChainId`
+  and unbound => permanently `Retired` by the L2 oracle). The sequence
+  `Lane 2 -> ChainId 2 -> Retired -> Lane 2 -> ChainId 3` is exactly what the fold
+  produces. This is the ABA foundation consumed by Phase 6/7 and is independently
+  exercised by Phase-7 D-K14. Classified:
+  `LaneReuse permitted AND PersistentChainIdReuse forbidden`.
+- **`nextChainId` as permanent retirement memory — sufficient.** No explicit
+  retired-set is stored; permanence rests on the triad
+  `nextChainId monotone-nondecreasing + ActiveIds < nextChainId + NewId = nextChainId`.
+  Within one canonical history this triad holds: `nextChainId` only ever `+= 1` on
+  SPLIT and is untouched on MERGE/HOLD (`:255,271,244-246`); the coherence oracle
+  guarantees `ActiveIds < nextChainId`; SPLIT sets `NewId = nextChainId` before
+  incrementing. Therefore a retired id can never be re-allocated within a history.
+- **L3 exhaustion fail-closed:** SPLIT at `nextChainId == 0xFFFFFFFF` returns false
+  rather than wrapping/recycling (`:250-251`).
+
+### F-CL-1 (FINDING, distinction preserved) — within-history monotonicity vs. cross-branch comparison
+`nextChainId` monotonicity is a **within-canonical-history** invariant, not a
+global one. A reorg legitimately reconstructs an earlier prefix with a *lower*
+`nextChainId`; since `L_h` is a pure fold of the (new) canonical prefix, this is
+correct re-derivation, NOT identity reuse — the abandoned branch's higher
+`nextChainId` and its retirements existed only on that abandoned branch. The
+implementation supports this precisely because it stores NO cross-branch state:
+`LitenyxCalculateExpectedLifecycleFromChain` always folds from `L_0` over the
+current canonical blocks (`:353-376`), so branch state never leaks. Classified:
+correct; the guard is "no path regresses `nextChainId` *within one history*,"
+which SPLIT/MERGE/HOLD structurally satisfy.
+
+## Surface 3 — canonical reconstruction + N-source identity (PASS)
+
+- **Path-independent fold from `L_0`.** `LitenyxCalculateExpectedLifecycleFromChain`
+  walks `OBS_WINDOW` boundaries ascending, reconstructing each window from
+  canonical `(chainId, weight)` and folding G (`:356-374`). No tracker/cache/
+  arrival-order input.
+- **Decisive `N_h^{Phase4} == N_h^{Phase5}` check — SEMANTIC IDENTITY, not two
+  derivations:** Phase 5 does not consume a separately-supplied Phase-4 value nor
+  re-implement the controller; it advances the *actual frozen Phase-4 engine
+  inline* — same `LitenyxReconstructMcV1Window` + `LitenyxDeriveTopologyAtBoundary`
+  (`:364-365`) — and feeds the resulting `Nprev -> Ncur` scalar into G (`:357,367,371`).
+  There is exactly one topology derivation; the lifecycle fold is a strict
+  identity-layer *over* it. Any `|d|>1` or non-boundary delta is rejected by G
+  (`:236,239`), so an impossible topology smuggled into the chain fails closed.
+
+## Surface 4 — enforcement integration (PASS, fail-closed)
+
+`LitenyxCheckLifecycleCommitment` (`validation.cpp:191-256`): regime from the
+frozen INDEPENDENT Phase-5 activation; PreDerivation rejects a premature V3
+commitment; else derive expected `L_h` from canonical chain via the SAME
+`LitenyxBuildCanonicalBlocks` Phase 4 uses, then pure-verify.
+
+- **Two distinct fail-closed exits:** unreadable/pruned history ->
+  `litenyx-lifecycle-reconstruct-unavailable` (`:223-228`); an impossible folded
+  transition -> `litenyx-lifecycle-derivation-invalid` (`:230-235`). No fallback to
+  tracker/cache/asserted-commitment/default.
+- **Soft-advisory containment mirrors G-TA-3:** advisory mismatch is log-only
+  (`:245-250`); expected `L_h` is always recomputed from ancestry, so a soft-mode
+  mismatch cannot persist into later hard-authority derivation.
+
+## Surface 5 — Phase-4 coupling / contiguous lane domain (PASS)
+
+- **Strongest coherence condition `|activeBindings_h| == N_h` HOLDS** and is
+  stronger still: the oracle requires the domain be the exact contiguous prefix
+  `{0..N_h-1}` ascending (`:199,204`). Sparse bindings are structurally
+  impossible.
+- **MERGE-victim determinism is well-founded:** because the domain is a contiguous
+  prefix, "retire the highest active lane `== Ncur == Nprev-1`" (`:260-261`) is
+  unambiguous. The concern that sparse bindings could make the highest-lane rule
+  ambiguous does not arise — coherence forbids sparsity before and after every fold.
+
+## Central-question resolution
+
+YES. `L_h = LifecycleFold(TopologyFold(CanonicalHistory))`:
+
+```
+CanonicalHistory -> TopologyFold(N_h) -> LifecycleFold(L_h)
+  -> { activeBindings (bijection over {0..N_h-1}), nextChainId (monotone) }
+```
+
+Each active lane maps to exactly one chainId (L1 bijection, oracle-enforced);
+retirement is permanent (L2 oracle over monotone `nextChainId`, no recycle, L3
+fail-closed); lane reuse is permitted while identity reuse is forbidden; the fold
+is pure and path-independent; and Phase 5 shares one topology derivation with
+Phase 4 (semantic N-identity). Phase 5 adds persistent identity semantics over
+Phase 4's reusable-lane topology, exactly as intended.
+
+## Guardrails (doctrine-level; no code change now)
+
+- **G-CL-1** — `nextChainId` monotonicity is a WITHIN-CANONICAL-HISTORY invariant.
+  Reorg re-derivation to a lower `nextChainId` on a different canonical prefix is
+  correct and MUST NOT be "fixed" by persisting cross-branch retirement memory;
+  `L_h` must always be re-folded from `L_0` over the current canonical chain.
+- **G-CL-2** — The contiguous-prefix lane domain `{0..N_h-1}` is load-bearing for
+  the deterministic MERGE victim. No future change may permit sparse
+  `activeBindings`; the coherence oracle must remain gating on every fold I/O.
+- **G-CL-3** — Permanent retirement rests on the triad (`nextChainId` monotone +
+  `ActiveIds < nextChainId` + `NewId = nextChainId`). Any allocation scheme that
+  breaks the triad (e.g. reuse of a freed id, non-`nextChainId` allocation) reopens
+  the ABA hazard and is forbidden without a new lifecycle `nVersion`.
+
+## Disposition
+
+All five surfaces PASS; the central question resolves YES. F-CL-1 (within-history
+vs. cross-branch — correct as designed) recorded. Guardrails G-CL-1..3 recorded.
+No frozen invariant reopened. Proceed to Component 5 (Execution Authority) — where
+the Phase-5 -> Phase-6 boundary (`LitenyxValidateExecutionContext` /
+`LitenyxClassifyChainId`) becomes the authority projection, already partially
+mapped during the Phase-7 critique.
