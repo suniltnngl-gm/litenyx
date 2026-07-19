@@ -586,3 +586,180 @@ No frozen invariant reopened. Proceed to Component 5 (Execution Authority) — w
 the Phase-5 -> Phase-6 boundary (`LitenyxValidateExecutionContext` /
 `LitenyxClassifyChainId`) becomes the authority projection, already partially
 mapped during the Phase-7 critique.
+
+---
+
+# Component 5 — Execution Authority
+
+**Central question:** Does the authority projection deny by default, deriving
+MayRoute/MayBind solely from `L_h` with a closed, unambiguous failure taxonomy,
+never granting capability the lifecycle layer does not support?
+
+**Non-escalation invariant (the crux):**
+
+```
+Capabilities_P6(x, L_h)  ⊆  CapabilitiesPermittedBy_P5(x, L_h)
+```
+
+**Verdict:** YES. Phase 6 is a strict projection of Phase-5 lifecycle truth: it
+reconstructs nothing of its own, wraps the frozen `LitenyxValidateExecutionContext`
+as the sole classifier, projects a total/injective state map, and enforces a
+closed F1-F5 precedence with structural/regime guards evaluated BEFORE any
+lifecycle-derived verdict. The enforcement hook is ordered strictly after Phase 5
+and is non-bypassable. As anticipated, the highest-value output here is a set of
+semantic guardrails for future consumers (especially the MayBind capability-vs-
+transition distinction), not defects in the current pure projection.
+
+## Source anchors
+
+- `litenyx/LITENYX_execution_authority.h:38-65` — activation (regtest {600,800},
+  strictly after Phase-5 {200,400}).
+- `:67-108` — `ExecutionAuthorityState`, `ExecutionAuthorityCode` (F1-F5), result.
+- `:110-121` — `LitenyxProjectAuthorityState` (total projection).
+- `:138-198` — `LitenyxResolveExecutionAuthority` (precedence + capabilities).
+- `:200-236` — `LitenyxResolveExecutionAuthorityForLane` (adapter + sentinel).
+- `litenyx/LITENYX_validation.cpp:264-335` — enforcement integration.
+- `deploy/patches/litenyx-validation.patch:49-85` — ConnectBlock ordering.
+
+## Surface 1 — projection totality (PASS)
+
+`LitenyxProjectAuthorityState` (`:112-121`) maps `Active->AUTHORIZED`,
+`Retired->REVOKED`, `Nonexistent->UNKNOWN` over the frozen 3-value
+`LitenyxChainIdStatus`, with an unreachable fail-closed `return UNKNOWN`. There is
+no fourth state (the header explicitly notes "no DRAINING member (deferred)",
+`:69`), which is the Phase-7 D0 anchor: `DRAINING` never became a 4th authority
+state. Total and injective on the lifecycle status domain.
+
+## Surface 2 — failure precedence (PASS, operational not merely enum-ordered)
+
+`LitenyxResolveExecutionAuthority` (`:138-198`) evaluates in this ORDER, each
+returning immediately:
+
+1. **F5 Malformed** — `laneId >= TOPO_MAX_CHAINS`, BEFORE any lifecycle lookup,
+   with `state=UNKNOWN` set explicitly (`:154-158`).
+2. **F4 Premature** — `regime == PreDerivation`, still before projection (`:162-166`).
+3. **Projection** — only now is `LitenyxValidateExecutionContext` consulted;
+   `Unknown`/`Revoked` (`:175-181`) then `Ok`/`WrongLane` by lane agreement
+   (`:184-196`).
+
+- **Decisive check — malformed/premature cannot leak a misleading lifecycle
+  verdict:** because steps 1-2 return before `LitenyxValidateExecutionContext` is
+  ever called, a malformed lane or dormant regime yields `Malformed`/`Premature`
+  with `state=UNKNOWN` set as a guard value, NOT a lifecycle-derived
+  `UNKNOWN/REVOKED/WrongLane`. Precedence is proven by control flow, not by enum
+  numbering.
+- **Mutually exclusive & exhaustive:** every path returns exactly one code; the
+  enforcement `switch` (`validation.cpp:320-334`) has a `default` fail-closed to
+  `malformed`, so no code is unhandled.
+
+## Surface 3 — capability asymmetry (PASS)
+
+- `mayBind = true` on any AUTHORIZED identity, ANY lane (`:185`); `mayRoute`
+  additionally requires exact lane agreement `ctx.laneId == laneId` (`:186-189`).
+- **WrongLane** sets neither `authorized` nor `mayRoute`, keeps `mayBind=true`, and
+  surfaces the AUTHORITATIVE lane (`r.laneId = ctx.laneId`, `:194`).
+- **Non-escalation holds:** every capability requires AUTHORIZED, i.e. Phase-5
+  `Active`. A `Retired`/`Nonexistent` identity gets `mayBind=mayRoute=false`
+  (result default, never set true off the non-Active paths). Thus
+  `Capabilities_P6 ⊆ CapabilitiesPermittedBy_P5` by construction — P6 can never
+  grant a capability for an identity P5 does not classify Active.
+
+### F-EA-1 (FINDING, HIGH-VALUE guardrail) — MayBind is a capability predicate, not a binding-transition authority
+`mayBind=1` means "this AUTHORIZED identity is permitted to bind under the frozen
+Phase-6 model" — it is a READ-ONLY predicate over `L_h`. It does NOT, and must
+never be read to, authorize mutation of `activeBindings`. Phase 5
+(`LitenyxAdvanceChainIdLifecycle`) remains the SOLE owner of lifecycle/identity
+mutation, driven by canonical topology deltas — not by any Phase-6 result. If a
+future consumer treated `mayBind` as "this operation may mutate bindings," Phase 6
+would silently become a lifecycle-mutation authority, violating the layering.
+Recorded as G-EA-1.
+
+```
+MayBind = capability predicate   ≠   binding-transition authority
+```
+
+## Surface 4 — WrongLane safety (PASS)
+
+The claimed lane never becomes authoritative through error handling. On WrongLane
+the engine OVERWRITES the echoed claim with the authoritative bound lane
+(`r.laneId = ctx.laneId`, `:194`) purely as diagnostic/routing output;
+`mayRoute` stays false, so no routing capability is granted on the claimed lane.
+The claimed lane is only ever an input to the agreement test, never promoted.
+
+## Surface 5 — adapter sentinel (PASS; depends on the P5 retirement triad)
+
+`LitenyxResolveExecutionAuthorityForLane` (`:219-236`) looks up the
+PersistentChainId bound to the asserted lane in `L_h`; if unbound it asserts the
+sentinel `assertedChainId = L.nextChainId` (`:228`).
+
+- **Decisive check — sentinel cannot collide with an active or retired identity:**
+  by the Phase-5 retirement triad (proven in Component 4), every existing id is
+  `< nextChainId`. `LitenyxClassifyChainId(L, nextChainId)` therefore hits
+  `chainId >= nextChainId -> Nonexistent` (`chainid_lifecycle.h:288`) with
+  certainty. An unbound lane deterministically resolves to `Unknown` (F1), never
+  colliding with an Active or Retired id. This is exactly the cross-component
+  dependency you flagged, and it holds because Surface 2/Component-4 guarantee
+  `ActiveIds ∪ RetiredIds ⊂ [0, nextChainId)`.
+
+## Surface 6 — enforcement composition (PASS, non-bypassable, consume-only)
+
+- **Ordering (from the ConnectBlock hook patch):**
+  `ConnectSharedState (patch:49) -> CheckTopologyCommitment (58) ->
+  CheckLifecycleCommitment (72) -> CheckExecutionAuthority (85)`. P6 runs strictly
+  after P5; a block cannot route around it.
+
+```
+ConnectBlock -> P5 LifecycleCheck -> P6 AuthorityCheck -> RemainingValidation
+```
+
+- **Consume-only.** `LitenyxCheckExecutionAuthority` reuses the SAME
+  `LitenyxBuildCanonicalBlocks` + `LitenyxCalculateExpectedLifecycleFromChain`
+  (`validation.cpp:285-294`) — it does not build a parallel lifecycle model — then
+  resolves the lane and maps the pure code to a consensus verdict (`:300-334`).
+- **Fail-closed** on unreadable history (`litenyx-exec-reconstruct-unavailable`)
+  and impossible derivation (`litenyx-exec-derivation-invalid`); SoftAdvisory is
+  log-only (`:305-314`), HardAuthority rejects every non-Ok code distinctly.
+- **Activation ordering, no gap:** `H_exec_derive >= H_cid_derive` and
+  `H_exec_enforce >= H_cid_enforce` (`:38-40`), regtest {600,800} strictly after
+  Phase-5 {200,400}. There is no height at which P6 enforces authority against
+  lifecycle semantics that are not yet themselves authoritative.
+
+## Central-question resolution
+
+YES. The architecture resolves exactly as:
+
+```
+CanonicalHistory -> P4 Topology -> P5 Lifecycle -> P6 AuthorityProjection
+  -> { MayBind, MayRoute }
+```
+
+Deny-by-default (all capabilities require AUTHORIZED==Active); capabilities are a
+strict subset of P5-permitted (non-escalation holds); F1-F5 is closed,
+mutually-exclusive, exhaustive, with structural/regime guards ahead of any
+lifecycle verdict; the adapter sentinel provably classifies Nonexistent via the
+P5 triad; enforcement is ordered after P5, non-bypassable, and consume-only.
+
+## Guardrails (doctrine-level; no code change now)
+
+- **G-EA-1** — `mayBind` is a capability PREDICATE over `L_h`, never authority to
+  mutate `activeBindings`. Lifecycle mutation is owned EXCLUSIVELY by Phase 5
+  driven by canonical topology deltas. No consumer may treat a Phase-6 result as a
+  binding-transition trigger.
+- **G-EA-2** — A WrongLane result's surfaced authoritative lane is
+  diagnostic/routing information only; the claimed lane must never be promoted to
+  authoritative through error handling or retry.
+- **G-EA-3** — The adapter's unbound-lane sentinel (`nextChainId`) is correct ONLY
+  while the Phase-5 retirement triad holds (G-CL-3). Any change to allocation that
+  breaks the triad also breaks this fail-closed classification.
+- **G-EA-4** — Phase 6 activation must remain at/after Phase 5
+  (`H_exec_* >= H_cid_*`); no future retuning may create a height where authority is
+  enforced against non-authoritative lifecycle semantics.
+
+## Disposition
+
+All six surfaces PASS; the central question and non-escalation invariant resolve
+YES. The single high-value finding F-EA-1 (capability-vs-transition) is captured as
+G-EA-1. Guardrails G-EA-1..4 recorded. No frozen invariant reopened. Proceed to
+Component 6 (Draining Overlay) — re-examined here as an ecosystem component,
+consuming the frozen boundary at 770496e with the emitter/provenance path still
+explicitly OPEN.
