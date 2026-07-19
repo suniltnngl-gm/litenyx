@@ -410,6 +410,54 @@ the pruning-safe metadata is a Phase 4B(3)/pre-mainnet requirement, tracked in
 
 ---
 
+### 5.7 Topology commitment carrier & preimage (FROZEN — Phase 4B(3))
+
+The commitment binds a block to the topology the network independently derives.
+The AuxHeader **carries** the commitment; it NEVER **defines** authoritative
+topology (nodes derive `T_h` from canonical history per §5.6).
+
+**Carrier (FROZEN).** A fixed `uint256` field
+`LitenyxAuxHeader.topologyCommitment`. A fixed field (not coinbase/TLV) means the
+only meaningful states are **absent** (`IsNull()`), **present**, and
+**match/mismatch** — there is no "malformed" or "duplicate" commitment.
+
+**Value (FROZEN).** The field carries `TopologyCommitmentHash(T_h)`, DISTINCT
+from and NOT replacing the KAT-frozen `TopologyStateHash` (§3):
+
+```text
+DOMAIN            = "LITENYX/TOPO/v1\0"          (16 bytes, ASCII, FROZEN)
+preimage          = DOMAIN(16) || nVersion(LE32) || canonicalState(13)   // 33 bytes
+TopologyCommitmentHash(T) = SHA256d(preimage)                            // 32 bytes
+```
+
+Domain separation + version binding guarantee no other Litenyx structure can
+serialize to a colliding commitment preimage, and a future authority version
+(`nVersion != 1`) produces disjoint commitments. `TopologyStateHash` stays plain
+`SHA256d(state13)` and its genesis KAT is unchanged.
+
+KAT (genesis state, `nVersion=1`):
+
+```text
+TopologyStateHash(genesis)      = 71667e04205a7150268d09b82c13849ddd2d187cbf73f5d83b2aecea693bfc09
+TopologyCommitmentHash(genesis) = dc4f6a4a36b97949c49638a30804ee167106b2b64ae929d012a6506d213ebf09
+```
+
+**Verifier (FROZEN, PURE).** `LitenyxVerifyTopologyCommitment(regime, present,
+commitment, expected) → {Valid, Invalid, AdvisoryMismatch}`. No I/O, no globals.
+Outcome table (matches §8/§9):
+
+| Regime | absent | present + match | present + mismatch |
+|--------|--------|-----------------|--------------------|
+| Pre-derivation | Valid | Invalid (premature) | Invalid (premature) |
+| Soft / advisory | Valid | Valid | **AdvisoryMismatch** (warn, not invalid) |
+| Hard / authoritative | **Invalid** | Valid | **Invalid** |
+
+The daemon maps `Valid → accept`, `Invalid → return false`, `AdvisoryMismatch →
+log only`. This 4B(3) deliverable is PURE; wiring the verdict into `ConnectBlock`
+is 4B(4) (§6, §13).
+
+---
+
 ## 6. Validation order (`ConnectBlock`)
 
 The authoritative topology check is inserted with a STRICT ordering so it fails

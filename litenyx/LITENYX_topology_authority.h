@@ -32,6 +32,7 @@
 
 #include "LITENYX_types.h"
 #include "LITENYX_topology.h" // frozen controller: LitenyxTopoDecide/Apply/TransitionHeight
+#include "LITENYX_auxpow.h"   // uint256 (+ standalone shim) and LitenyxAuxHeader carrier
 
 // ---- Frozen consensus constants (spec §5.5) --------------------------------
 // DEMAND_SCALE: fixed-point demand scale. 0..DEMAND_SCALE == 0.00%..100.00%.
@@ -47,6 +48,14 @@ static const int64_t LITENYX_CONTROLLER_DOWNSCALE = LITENYX_DEMAND_SCALE / 100;
 // TopologyState canonical serialization/authority version (spec §3). Changing
 // D_v1 / M_c_v1 / the downscale REQUIRES a new nVersion + activation height.
 static const uint32_t LITENYX_TOPOLOGY_STATE_VERSION = 1;
+
+// Domain separation tag for the AuxHeader COMMITMENT preimage (spec §5.7). This
+// is DISTINCT from TopologyStateHash (which stays plain SHA256d over the 13-byte
+// state, KAT-frozen). The commitment binds DOMAIN || version || canonical state,
+// so no other Litenyx structure can collide with a topology commitment. 16 bytes,
+// ASCII, FROZEN.
+#define LITENYX_TOPO_COMMIT_DOMAIN "LITENYX/TOPO/v1\0"
+static const size_t LITENYX_TOPO_COMMIT_DOMAIN_LEN = 16;
 
 // ---- Activation semantics (spec §8, FROZEN scheme) -------------------------
 // Named "never" sentinel. A network with H_derive == DISABLED is dormant: the
@@ -308,12 +317,88 @@ inline void double_sha256(const unsigned char* p, size_t n, unsigned char out[32
 
 // TopologyStateHash: double-SHA256 of the canonical serialization (spec §3).
 // Returns 32 bytes. Deterministic and platform-independent.
+// FROZEN (KAT-locked): plain SHA256d over the 13-byte state. Do NOT change.
 inline void LitenyxTopologyStateHash(
     const LitenyxTopologyState& s, unsigned char out[32])
 {
     unsigned char ser[13];
     LitenyxSerializeTopologyState(s, ser);
     litenyx_detail::double_sha256(ser, sizeof(ser), out);
+}
+
+// ---- TopologyCommitmentHash (spec §5.7) ------------------------------------
+// The value carried in LitenyxAuxHeader.topologyCommitment. DOMAIN-SEPARATED and
+// version-bound, DISTINCT from TopologyStateHash:
+//   commitment = SHA256d( DOMAIN(16) || nVersion(LE32) || canonicalState(13) )
+// This binds the commitment to the topology domain + version so no other Litenyx
+// structure can serialize to a colliding preimage.
+inline uint256 LitenyxTopologyCommitmentHash(const LitenyxTopologyState& s)
+{
+    unsigned char pre[16 + 4 + 13];
+    std::memcpy(pre, LITENYX_TOPO_COMMIT_DOMAIN, LITENYX_TOPO_COMMIT_DOMAIN_LEN);
+    unsigned char* p = pre + LITENYX_TOPO_COMMIT_DOMAIN_LEN;
+    p[0] = (unsigned char)(s.nVersion & 0xFF);
+    p[1] = (unsigned char)((s.nVersion >> 8) & 0xFF);
+    p[2] = (unsigned char)((s.nVersion >> 16) & 0xFF);
+    p[3] = (unsigned char)((s.nVersion >> 24) & 0xFF);
+    LitenyxSerializeTopologyState(s, p + 4);
+
+    uint256 out;
+    litenyx_detail::double_sha256(pre, sizeof(pre), out.begin());
+    return out;
+}
+
+// ---- Pure commitment verification (spec §5.7 / §9) -------------------------
+// Verdicts for a commitment against the independently-derived expected state.
+// Fixed-field representation (uint256 in AuxHeader): the ONLY meaningful states
+// are absent (NULL), present, and match/mismatch. There is no "malformed" or
+// "duplicate" for a fixed uint256 field.
+enum class LitenyxCommitVerdict {
+    Valid = 0,          // accept
+    Invalid = 1,        // consensus-invalid: fail closed (hard regime)
+    AdvisoryMismatch = 2, // soft regime: reportable, NOT consensus-invalid
+};
+
+// VerifyTopologyCommitment: pure decision given the activation regime, whether a
+// commitment is present, the carried commitment, and the expected state derived
+// from canonical history. NO I/O, NO globals. The daemon maps Valid/Invalid to
+// accept / `return false`; AdvisoryMismatch is logged only (§8 soft regime).
+//
+// Frozen outcome table (spec §9):
+//   PreDerivation  : present  -> Invalid (reject premature commitment)
+//                    absent   -> Valid
+//   SoftAdvisory   : absent   -> Valid
+//                    correct  -> Valid
+//                    mismatch -> AdvisoryMismatch (warn, not invalid)
+//   HardAuthority  : absent   -> Invalid
+//                    mismatch -> Invalid
+//                    correct  -> Valid
+inline LitenyxCommitVerdict LitenyxVerifyTopologyCommitment(
+    LitenyxTopoRegime regime,
+    bool hasCommitment,
+    const uint256& commitment,
+    const LitenyxTopologyState& expected)
+{
+    const bool matches =
+        hasCommitment && (commitment == LitenyxTopologyCommitmentHash(expected));
+
+    switch (regime) {
+        case LitenyxTopoRegime::PreDerivation:
+            // No topology semantics yet; a present commitment is premature.
+            return hasCommitment ? LitenyxCommitVerdict::Invalid
+                                 : LitenyxCommitVerdict::Valid;
+
+        case LitenyxTopoRegime::SoftAdvisory:
+            if (!hasCommitment) return LitenyxCommitVerdict::Valid;
+            return matches ? LitenyxCommitVerdict::Valid
+                           : LitenyxCommitVerdict::AdvisoryMismatch;
+
+        case LitenyxTopoRegime::HardAuthority:
+            if (!hasCommitment) return LitenyxCommitVerdict::Invalid;
+            return matches ? LitenyxCommitVerdict::Valid
+                           : LitenyxCommitVerdict::Invalid;
+    }
+    return LitenyxCommitVerdict::Invalid; // unreachable; fail closed
 }
 
 // ---- Pure authoritative transition: F(T_{h-1}, C_h) (spec §4/§5) -----------

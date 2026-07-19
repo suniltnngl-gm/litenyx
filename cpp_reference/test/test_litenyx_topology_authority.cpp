@@ -439,6 +439,75 @@ BOOST_AUTO_TEST_CASE(chain_reorg_prefix_identity)
     BOOST_CHECK(t1 == t2);
 }
 
+// C1: TopologyCommitmentHash — domain-separated, version-bound, KAT-pinned, and
+// DISTINCT from the (unchanged) TopologyStateHash.
+BOOST_AUTO_TEST_CASE(commitment_hash_domain_separated)
+{
+    LitenyxTopologyState g = LitenyxTopologyState::Genesis();
+
+    // TopologyStateHash KAT is UNCHANGED (regression guard for §3 freeze).
+    unsigned char sh[32];
+    LitenyxTopologyStateHash(g, sh);
+    BOOST_CHECK_EQUAL(
+        HexOf(sh),
+        "71667e04205a7150268d09b82c13849ddd2d187cbf73f5d83b2aecea693bfc09");
+
+    // Commitment hash KAT (domain || version || state). Pins the preimage bytes.
+    uint256 c = LitenyxTopologyCommitmentHash(g);
+    BOOST_CHECK_EQUAL(
+        HexOf(c.data),
+        "dc4f6a4a36b97949c49638a30804ee167106b2b64ae929d012a6506d213ebf09");
+
+    // Domain separation: commitment MUST differ from the plain state hash.
+    BOOST_CHECK_NE(HexOf(c.data), HexOf(sh));
+
+    // Field-sensitive: changing state changes the commitment.
+    LitenyxTopologyState a = g; a.nN = (uint8_t)(g.nN + 1);
+    BOOST_CHECK_NE(HexOf(LitenyxTopologyCommitmentHash(a).data), HexOf(c.data));
+}
+
+// C2: VerifyTopologyCommitment — frozen outcome table (fixed-field semantics).
+BOOST_AUTO_TEST_CASE(verify_commitment_outcomes)
+{
+    using R = LitenyxTopoRegime;
+    using V = LitenyxCommitVerdict;
+    LitenyxTopologyState exp = LitenyxTopologyState::Genesis();
+    uint256 correct = LitenyxTopologyCommitmentHash(exp);
+    uint256 wrong = correct; wrong.data[0] ^= 0xFF;
+    uint256 nul; nul.SetNull();
+    BOOST_CHECK(nul.IsNull());
+    BOOST_CHECK(!correct.IsNull());
+
+    // PreDerivation: absent OK; present is premature -> Invalid.
+    BOOST_CHECK(LitenyxVerifyTopologyCommitment(R::PreDerivation, false, nul, exp) == V::Valid);
+    BOOST_CHECK(LitenyxVerifyTopologyCommitment(R::PreDerivation, true, correct, exp) == V::Invalid);
+
+    // SoftAdvisory: absent OK; correct OK; mismatch -> advisory (NOT invalid).
+    BOOST_CHECK(LitenyxVerifyTopologyCommitment(R::SoftAdvisory, false, nul, exp) == V::Valid);
+    BOOST_CHECK(LitenyxVerifyTopologyCommitment(R::SoftAdvisory, true, correct, exp) == V::Valid);
+    BOOST_CHECK(LitenyxVerifyTopologyCommitment(R::SoftAdvisory, true, wrong, exp) == V::AdvisoryMismatch);
+
+    // HardAuthority: absent -> Invalid; mismatch -> Invalid; correct -> Valid.
+    BOOST_CHECK(LitenyxVerifyTopologyCommitment(R::HardAuthority, false, nul, exp) == V::Invalid);
+    BOOST_CHECK(LitenyxVerifyTopologyCommitment(R::HardAuthority, true, wrong, exp) == V::Invalid);
+    BOOST_CHECK(LitenyxVerifyTopologyCommitment(R::HardAuthority, true, correct, exp) == V::Valid);
+}
+
+// C3: AuxHeader carries the commitment; HasTopologyCommitment reflects NULL.
+BOOST_AUTO_TEST_CASE(auxheader_carries_commitment)
+{
+    LitenyxAuxHeader h;
+    h.SetNull();
+    BOOST_CHECK(!h.HasTopologyCommitment()); // NULL == absent
+
+    h.topologyCommitment = LitenyxTopologyCommitmentHash(LitenyxTopologyState::Genesis());
+    BOOST_CHECK(h.HasTopologyCommitment());
+
+    // The carrier round-trips the value unchanged (fixed uint256 field).
+    uint256 c = h.topologyCommitment;
+    BOOST_CHECK(c == LitenyxTopologyCommitmentHash(LitenyxTopologyState::Genesis()));
+}
+
 // A10: activation semantics (spec §8) — regimes, disabled sentinel, validity.
 BOOST_AUTO_TEST_CASE(activation_regimes_and_disabled)
 {

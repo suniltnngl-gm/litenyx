@@ -18,7 +18,17 @@
 struct uint256 {
     unsigned char data[32] = {};
     bool operator==(const uint256& o) const { return std::memcmp(data, o.data, 32) == 0; }
+    bool operator!=(const uint256& o) const { return !(*this == o); }
     bool operator<(const uint256& o) const { return std::memcmp(data, o.data, 32) < 0; }
+    // Subset of the real Dogecoin uint256 surface used by Litenyx consensus code,
+    // so identical code compiles standalone AND in the daemon.
+    bool IsNull() const {
+        for (int i = 0; i < 32; ++i) if (data[i]) return false;
+        return true;
+    }
+    void SetNull() { std::memset(data, 0, 32); }
+    unsigned char* begin() { return data; }
+    const unsigned char* begin() const { return data; }
 };
 inline uint256 uint256S(const char* hex) {
     uint256 r{};
@@ -37,6 +47,11 @@ struct LitenyxAuxHeader {
     uint32_t eventHeight;    // height the event is evaluated at (Phase 3; 0 now)
     uint256  auxAnchor;      // commits to the parent tip on the SAME chain
     uint64_t splitVector;    // reserved for Phase 3 (split/merge vector)
+    uint256  topologyCommitment; // Phase 4: TopologyCommitmentHash of expected
+                                 // T_h, or NULL when no commitment is present.
+                                 // The AuxHeader CARRIES the commitment; it does
+                                 // NOT define authoritative topology (nodes
+                                 // derive that independently). See §5.7.
     uint32_t reserved;       // must be zero
 
     void SetMagic() { magic = LITENYX_AUX_MAGIC; }
@@ -48,8 +63,12 @@ struct LitenyxAuxHeader {
         eventHeight = 0;
         auxAnchor = uint256();
         splitVector = 0;
+        topologyCommitment = uint256();
         reserved = 0;
     }
+
+    // Phase 4 accessor: is a topology commitment present in this header?
+    bool HasTopologyCommitment() const { return !topologyCommitment.IsNull(); }
 
 #ifndef KERRNYX_STANDALONE_TEST
     ADD_SERIALIZE_METHODS;
@@ -61,6 +80,7 @@ struct LitenyxAuxHeader {
         READWRITE(eventHeight);
         READWRITE(auxAnchor);
         READWRITE(splitVector);
+        READWRITE(topologyCommitment);
         READWRITE(reserved);
     }
 #endif
