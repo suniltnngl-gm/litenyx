@@ -57,7 +57,7 @@ index 97d4ff5..9fef3cf 100644
 +    // HardAuthority fails closed on missing/mismatched commitments.
 +    if (!LitenyxCheckTopologyCommitment(block, pindex->pprev,
 +                                        Params().NetworkIDString(),
-+                                        Params().GetConsensus(), state)) {
++                                        Params().GetConsensus(pindex->nHeight), state)) {
 +        return false;
 +    }
 +
