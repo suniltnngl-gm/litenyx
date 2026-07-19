@@ -1,0 +1,380 @@
+# Litenyx Topology Authority Consensus Specification — v0.1
+
+*Status: DRAFT (Phase 4 substrate). Promotes the Phase-3 dynamic chain-count
+control from OBSERVATIONAL/planning state to CONSENSUS-AUTHORITATIVE state. This
+document extends `litenyx_topology_spec_v0.1.md` (Phase 3) and is ONLY valid
+once the Phase-3 acceptance gate is GREEN and frozen at tag `phase3-green`
+(commit `b5574cb`). Phase 4 work branches from `b5574cb` via
+`phase4-topology-authority`; `phase3-green` remains a read-only recovery
+anchor.*
+
+Phase 4 makes topology **reproducible from committed chain history alone**, binds
+a topology commitment into each block, and validates it fail-closed in
+`ConnectBlock`. It does **not** promote the Phase-3 `LitenyxTopologyTracker` into
+consensus; instead it extracts the deterministic transition mathematics into a
+NEW pure consensus function and leaves the tracker as a non-authoritative
+observer.
+
+Phase 4 deliberately DEFERS actual `chainId` lifecycle *enforcement* (rejecting
+txs on not-yet-created or retired lanes) to a later phase, to keep the Phase-4
+consensus delta minimal and auditable. Phase 4 establishes the authoritative
+topology state that such enforcement will later depend on.
+
+---
+
+## 0. The single invariant Phase 4 must establish
+
+> **Given identical committed chain history, every honest node MUST derive
+> exactly the same topology state `T_h`, and a block whose topology commitment
+> does not match the derived `T_h` is CONSENSUS-INVALID.**
+
+Everything below exists to make that statement true and testable.
+
+### 0.1 Corollary — path independence (LOCKED)
+
+> **Topology derivation MUST NOT depend on the order in which a node received
+> blocks.** After a reorg or initial block download (IBD), deriving `T_h` from
+> the winning chain MUST produce EXACTLY the same `TopologyState` (and therefore
+> the same `TopologyStateHash`) as a node that connected those blocks
+> sequentially in real time.
+
+Formally, `T_h` is a pure function of the ordered committed block sequence
+`[B_0 .. B_h]` of the active chain — never of arrival order, timing, or which
+competing branches a node transiently held. This is what makes the commitment
+safe to enforce (§9) and rollback deterministic (§7).
+
+---
+
+## 1. Locked principles (carried from Phase 2/3)
+
+1. **1 Blockchain family + 1 Currency + 1 Global Monetary State + N Parallel
+   Chains.** Topology authority changes only how `N_h` / the active `chainId`
+   set is *derived and committed*; it never creates a new currency or a second
+   UTXO universe.
+2. **Shared UTXO.** The spent-set remains global and single across all N chains,
+   before, during, and after any topology change.
+3. **ConsensusCore != RuntimePolicy != WalletPolicy.** Topology derivation is a
+   ConsensusCore behavior. No node-local heuristic, mempool state, wall clock,
+   RPC observation, or process-local counter may influence authoritative
+   topology.
+4. Phase-2 invariant survives for ALL valid N:
+   `Spend(U, C_i) => NOT Spend(U, C_j)` for `i != j`.
+5. **Consensus fails closed; observation fails safe.** (Phase-3 boundary,
+   preserved.) A consensus-topology mismatch MUST `return false`. An
+   observational tracker exception MUST remain contained by `catch(...)` and
+   MUST NOT affect validity.
+
+---
+
+## 2. Architecture: two separate paths
+
+```text
+Committed Chain History
+        │
+        ▼
+Pure Consensus Topology Function      LitenyxTopologyTracker
+   T_h = F(T_{h-1}, C_h)                     │  (observational)
+        │                                    │  Observe()/Tick()
+        ▼                                    │  exception → catch(...) allowed
+Expected Topology State T_h                  │
+        │                                    └── telemetry / planning only
+        ├── verify against Block Topology Commitment
+        │        mismatch → return false
+        ▼
+Consensus-valid topology
+        │
+        ├── (FUTURE) chainId lifecycle enforcement
+        ├── shared-state rules (Phase 2)
+        └── (FUTURE) receipt routing / execution lanes
+```
+
+**Rule:** the Phase-3 transition math (`LitenyxTopoDecide`, `LitenyxTopoApply`,
+`LitenyxTopoTransitionHeight`, `LitenyxTopoAggregateLoad`) is REUSED by the pure
+consensus function. The tracker CALLS the same math but is never itself the
+source of authoritative state.
+
+---
+
+## 3. Canonical `TopologyState`
+
+`TopologyState` (`T_h`) is the authoritative topology at height `h`. It is
+serialized canonically and committed per block.
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `nVersion` | `uint16` | topology-state schema/epoch version (starts at 1) |
+| `nChains` (`N_h`) | `uint8` | active chain count, `MIN_CHAINS <= N_h <= TOPO_MAX_CHAINS` |
+| `activeChainIds` | ordered set of `uint8` | the exact lanes that exist at `h` |
+| `lastTransitionHeight` | `uint32` | canonical height of the last applied transition (0 if none) |
+
+**Rationale (per review):** committing `N_h` alone is insufficient — `N_h = 8`
+does not say *which* eight lanes exist across a history of splits and merges.
+The commitment therefore binds a hash of the full canonical `TopologyState`, not
+just `N_h`.
+
+### 3.1 Canonical serialization
+
+`SerializeTopologyState(T)` is a fixed byte layout (little-endian, no padding):
+
+```
+nVersion (2) || nChains (1) || len(activeChainIds) (1) ||
+activeChainIds[0..len-1] (1 each, ascending) || lastTransitionHeight (4)
+```
+
+`TopologyStateHash(T) = SHA256(SHA256(SerializeTopologyState(T)))` (double-SHA256,
+matching Bitcoin/Dogecoin convention). Ascending-sorted `activeChainIds`
+guarantees a single canonical encoding for a given set.
+
+---
+
+## 4. Authoritative transition function `F`
+
+```text
+T_h = F(T_{h-1}, C_h)
+```
+
+- `T_{h-1}` is the authoritative topology committed by the parent block
+  (genesis seeds `T_0 = { version=1, nChains=MIN_CHAINS,
+  activeChainIds={0,1}, lastTransitionHeight=0 }`).
+- `C_h` is the **consensus input set** for height `h` (see §5). It contains ONLY
+  data deterministically derivable from committed block(s).
+
+`F` is pure: `F(T_{h-1}, C_h)` always yields the same `T_h`. It:
+1. accumulates the per-chain measurement(s) from `C_h` into the current window,
+2. at an observation boundary (`h % OBS_WINDOW == 0`), computes
+   `LitenyxTopoDecide(...)` on the window and applies `LitenyxTopoApply(...)`,
+   updating `nChains`, `activeChainIds`, and `lastTransitionHeight`,
+3. otherwise returns `T_{h-1}` unchanged (advancing only window accumulation).
+
+Split adds the lowest unused `chainId` in `[0, TOPO_MAX_CHAINS)`; merge retires
+the highest active `chainId`. (Deterministic lane selection — LOCKED for v0.1;
+alternatives are FUTURE.)
+
+---
+
+## 5. `M_c` classification — THE gating decision
+
+Phase 4 CANNOT proceed to enforcement until every input in `C_h` is proven to be
+a pure function of committed chain history. Node-local, wall-clock, mempool, or
+RPC inputs are DISALLOWED.
+
+> **Determinism is necessary but NOT sufficient.** A metric derived from
+> committed data is *reproducible*, but that alone does not make it a *good*
+> permanent consensus signal. v0.1 therefore specifies the `M_c` **interface and
+> invariants** and marks the exact **production formula as TBD**, to be selected
+> and version-locked before `H_topology`.
+
+### 5.1 Derivation pipeline (LOCKED shape; formula slot TBD)
+
+```text
+Committed Block Data
+        │
+        ▼
+Canonical Demand Function  D(block)        ← formula TBD before H_topology
+        │
+        ▼
+Per-Block Demand Sample    M_b ∈ [0,100]
+        │
+        ▼
+Deterministic Historical Window            ← [h_obs-W+1, h_obs], committed only
+        │
+        ▼
+Per-Chain Measurement      M_c ∈ [0,100]
+        │
+        ▼
+Pure TopologyTransition(T_prev, M_c, height)
+        │
+        ▼
+Expected T_h
+```
+
+This shape lets the Phase-3 `nTx>0` proxy be swapped for the final canonical
+`D(block)` **without touching the topology controller** — only `D` changes.
+
+### 5.2 `M_c` interface / invariants (LOCKED for v0.1)
+
+Any admissible `D(block)` MUST satisfy:
+
+- **(I1) Purity.** `D` is a function of committed block data only. No mempool,
+  wall clock, RPC, or process-local counter.
+- **(I2) Range.** `M_b = D(block) ∈ [0, 100]` (normalized demand pressure),
+  matching the controller's existing `M_c` contract.
+- **(I3) Path independence.** `D` depends only on the block's own committed
+  contents, so windowing over `[B_0..B_h]` is order-independent (§0.1).
+- **(I4) Replay equivalence.** Re-deriving `M_b` during IBD/reorg yields the
+  identical value produced at original connection.
+- **(I5) Version-gated.** The chosen formula is pinned to `TopologyState.nVersion`
+  (§3); changing it requires a version bump + a new activation height (§8).
+
+### 5.3 Phase-3 proxy — CLASSIFIED, not frozen
+
+Phase 3 used `M_c = (block has ≥1 non-coinbase tx) ? 50 : 0` in `validation.cpp`.
+
+- **Classification: Phase-3 SYNTHETIC DETERMINISTIC PROXY.** It satisfies (I1),
+  (I2), (I3), (I4) — every node reproduces it from `block.vtx` — but it is a
+  coarse presence flag, not a demand metric. It is **explicitly NOT** frozen as
+  the Phase-4 production `D`. It remains valid ONLY as the observational tracker
+  feed and during the pre-derivation regime (§8).
+
+### 5.4 Candidate production metrics (analysis; selection TBD before `H_topology`)
+
+| Candidate | Committed? | Assessment |
+|-----------|-----------|------------|
+| **Block occupancy / weight** | yes | *Preferred candidate.* Represents consumed execution capacity; directly maps to "demand pressure." `M_b = clamp(floor(100 * blockWeight / MAX_BLOCK_WEIGHT), 0, 100)`. |
+| Transaction count | yes | Deterministic but treats one tiny tx like one maximum-cost tx; poor demand fidelity. Rejected as primary. |
+| Fee totals / fee density | yes | Committed, but measures *market conditions* as much as demand; conflates price with load. NOT the primary signal (may be a FUTURE secondary/telemetry input only). |
+
+**Provisional lead:** block occupancy/weight (satisfies I1–I5 and best models
+capacity). It is NOT locked in v0.1; the final `D` is selected, justified, and
+version-pinned in a spec revision **before** `H_topology`.
+
+---
+
+## 6. Validation order (`ConnectBlock`)
+
+The authoritative topology check is inserted with a STRICT ordering so it fails
+closed and never depends on observational state:
+
+```
+1. (existing Dogecoin) contextual + script checks
+2. LitenyxCheckAuxHeader(block, prev)              → false on failure
+3. LitenyxConnectSharedState(block)                → false on failure   (Phase 2)
+4. T_h = CalculateExpectedTopology(T_{h-1}, C_h)   → pure, no I/O
+5. VerifyTopologyCommitment(block, T_h)            → false on mismatch  (Phase 4)
+6. (FUTURE) chainId lifecycle enforcement using T_h
+7. persist/index T_h for this block                (deterministic rollback)
+8. LitenyxTopologyTracker::Observe()/Tick()        → catch(...) contained (telemetry)
+```
+
+Steps 4–5 are consensus-critical: NO `try/catch` may wrap them. Step 8 (the
+Phase-3 tracker) remains inside its observational `catch(...)` boundary.
+
+Pre-activation (§8) behavior for steps 4–5 is defined by the activation rule.
+
+---
+
+## 7. Rollback semantics (`DisconnectBlock`)
+
+Authoritative topology rollback MUST restore `T_{h-1}` from **indexed consensus
+state**, not by imperatively reversing a split/merge:
+
+```
+1. read the persisted T_{parent} from the topology index (keyed by block hash / height)
+2. restore authoritative topology to T_{parent}
+3. (existing Phase 2) LitenyxDisconnectSharedState(block)
+4. LitenyxTopologyTracker::Disconnect(...)          → catch(...) contained (telemetry)
+```
+
+Because `T_h` is committed and indexed, a reorg across any split/merge boundary
+deterministically restores the prior authoritative topology with no dependence
+on the observational tracker.
+
+---
+
+## 8. Activation boundary `H_topology`
+
+Staged activation (per Phase-4 decision) de-risks by proving network-wide
+determinism before enforcement:
+
+| Regime | Height range | Commitment | Validation |
+|--------|--------------|-----------|------------|
+| Pre-derivation | `h < H_derive` | absent | none; `T_h = T_0` fixed |
+| Soft / advisory | `H_derive <= h < H_topology` | present, computed + logged | mismatch WARNED, NOT rejected |
+| Hard / authoritative | `h >= H_topology` | MANDATORY | mismatch → `return false` |
+
+- Regtest/CI SHALL set `H_derive`/`H_topology` low (early heights) so the gate is
+  exercised deterministically.
+- The soft window lets multiple nodes confirm identical `TopologyStateHash`
+  before enforcement flips on.
+
+---
+
+## 9. Failure semantics (hard regime, `h >= H_topology`)
+
+The following are CONSENSUS-INVALID and MUST propagate `return false`:
+
+1. **Missing commitment** where mandatory.
+2. **Malformed commitment** (bad length / version / unsortable chainId set).
+3. **Incorrect transition**: `commitment != TopologyStateHash(CalculateExpectedTopology(...))`.
+4. **Out-of-bounds `N_h`** (`< MIN_CHAINS` or `> TOPO_MAX_CHAINS`).
+5. **(FUTURE, next phase)** unknown active `chainId`, premature lane use, or
+   retired-lane use.
+
+Observational tracker failures (§6 step 8, §7 step 4) remain contained and MUST
+NOT invalidate a block.
+
+---
+
+## 10. Phase-4 acceptance gate (must be GREEN to tag `phase4-green`)
+
+Extends the Phase-3 9/9 suite. All prior gates MUST still pass. New required
+tests:
+
+1. **Determinism**: two independent derivations from the SAME committed history
+   yield identical `TopologyStateHash` at every height.
+2. **Commitment round-trip**: `Serialize → Hash → Verify` accepts the correct
+   commitment and rejects every single-bit mutation.
+3. **Mismatch rejects**: a block carrying a wrong topology commitment is
+   rejected (`return false`) in the hard regime.
+4. **Soft regime tolerates**: the same wrong commitment in the soft window is
+   accepted but logged.
+5. **Reorg restores authority**: disconnecting across a split/merge boundary
+   restores `T_{parent}` from the index (not from the tracker).
+6. **`M_c` purity (I1/I2)**: derivation uses ONLY committed block data (no
+   mempool / time / RPC); proven by a test that varies node-local state and
+   asserts an identical `TopologyStateHash`.
+7. **Path independence (§0.1, I3/I4)**: derive `T_h` by (a) sequential
+   connection and (b) IBD/reorg re-derivation from the same winning chain;
+   assert byte-identical `TopologyStateHash` at every height regardless of block
+   arrival order.
+8. **Boundary preserved**: consensus checks fail closed; an injected tracker
+   exception does NOT invalidate a block.
+
+---
+
+## 11. Scope boundary (what Phase 4 does NOT do)
+
+- Does NOT enforce `chainId` lifecycle at the tx level (FUTURE / Phase 5).
+- Does NOT add cross-chain receipts or execution-lane routing (FUTURE).
+- Does NOT freeze the production `M_c`/`D` formula; v0.1 locks only the `M_c`
+  interface/invariants (§5.2). The canonical `D` is selected and version-pinned
+  in a spec revision before `H_topology`.
+- Does NOT alter block size, reward, supply, or wallet-count controllers
+  (remain FUTURE).
+- Does NOT promote `LitenyxTopologyTracker` into consensus.
+
+---
+
+## 12. Milestone boundary
+
+```text
+phase3-green @ b5574cb   (read-only anchor)
+    │  Deterministic topology OBSERVATION on real blocks
+    ▼
+phase4-green             (this spec)
+    │  Pure consensus topology function
+    │  Committed + indexed authoritative TopologyState
+    │  Fail-closed commitment validation (staged activation)
+    │  Tracker remains observational
+    ▼
+Phase 5+
+    chainId lifecycle enforcement · cross-chain receipts · dynamic lanes
+```
+
+---
+
+## 13. Implementation sequencing (deliberately incremental)
+
+1. **This commit — documentation only.** No code changes; `ConnectBlock`
+   untouched. Establishes the spec and the `M_c` interface/invariants.
+2. **Select canonical `D`.** Spec revision picks + justifies the production
+   demand formula (lead: block occupancy/weight), version-pins it (§3
+   `nVersion`), and sets `H_derive`/`H_topology`.
+3. **Pure consensus function — no `ConnectBlock` hook.** Introduce
+   `CalculateExpectedTopology` + `TopologyState` serialization/hash as pure,
+   standalone-testable code. Land replay-equivalence and path-independence tests
+   (§10.1, §10.7) FIRST.
+4. **Add authoritative validation hook.** Only after (3) is green, wire
+   `VerifyTopologyCommitment` into `ConnectBlock` (§6) behind staged activation
+   (§8) and the topology index into `DisconnectBlock` (§7).
+5. **Tag `phase4-green`** when the full gate (§10) is GREEN.
