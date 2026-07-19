@@ -251,7 +251,7 @@ is the consensus constant `MAX_BLOCK_WEIGHT = 4000000` (`src/consensus/consensus
 DEMAND_SCALE = 10000        // fixed-point, 0..10000 == 0.00%..100.00%
 ```
 `M_b ∈ [0, DEMAND_SCALE]`. (This SUPERSEDES the earlier 0..100 controller range;
-see §5.5.4 for the controller-scaling reconciliation.)
+see §5.5.5 for the controller-scaling reconciliation.)
 
 **(3) Rounding behavior.**
 Truncation toward zero (integer floor), integer-only, no floating point:
@@ -303,15 +303,58 @@ concept (the deterministic window of §5.1), and `T_h` derivation is a third.
 This separation is what makes future versioning safe: a new demand formula
 changes only `D`, not the aggregation or the transition machinery.
 
-**Controller-scaling reconciliation.** The Phase-3 controller
-(`LITENYX_topology.h`) operates on a 0..100 `M_c` with `HYST_LOW=20`,
-`HYST_HIGH=80`. `D_v1` produces 0..`DEMAND_SCALE` (0..10000). The canonical
-aggregation MUST map the committed samples onto the controller's input domain
-deterministically (integer-only). The exact mapping (rescale vs. widen the
-hysteresis band to the `DEMAND_SCALE` domain) is fixed in the next
-implementation commit alongside `CalculateExpectedTopology`, and MUST be
-integer-only and version-pinned. No controller math changes; only the input
-scaling is defined.
+#### 5.5.5 `M_c_v1` aggregation + controller-boundary scaling (FROZEN)
+
+**Decision: preserve full 0..`DEMAND_SCALE` precision through the ENTIRE window
+aggregation, then perform ONE deterministic downscale (floor ÷ 100) at the
+controller input boundary.** Per-sample downscaling is FORBIDDEN (it discards
+precision at every block).
+
+**The frozen controller contract (unchanged).** `LITENYX_topology.h` consumes,
+per chain `c`, a `LitenyxChainObservation.M_c` in 0..100, aggregates to
+`A = mean_c(M_c)` (`LitenyxTopoAggregateLoad`, integer floor mean), then decides
+with the STRICT inequalities `A > HYST_HIGH (80)` → SPLIT, `A < HYST_LOW (20)` →
+MERGE, else HOLD (`LitenyxTopoDecide`, lines 122/124). NONE of this changes.
+
+**The pinned pipeline (per chain `c`, over its committed window `W`):**
+```text
+D_v1(block_i)                                 0..DEMAND_SCALE  (10000)
+        ↓  full-precision window aggregation
+M_c_v1(c) := floor( sum_{i in W} D_v1(block_i) / W )    0..DEMAND_SCALE
+        ↓  SINGLE downscale at controller boundary
+ControllerInput.M_c(c) := floor( M_c_v1(c) / 100 )      0..100
+        ↓
+LitenyxTopoDecide( {ControllerInput.M_c(c)}, N_h, h_obs, lastTransition )
+```
+
+- `W` = canonical sample count for the applicable committed-history window
+  (`LITENYX_TOPOLOGY_OBS_WINDOW`, deterministic; §5.1). `W >= 1` always.
+- Only `M_c_v1(c)` is downscaled — NOT individual `D_v1` samples, NOT the
+  post-mean aggregate `A`. Each chain's window value crosses the 0..100 boundary
+  exactly once, before entering the existing `LitenyxChainObservation`.
+- **Strict-inequality boundary preserved.** Because `HYST_HIGH=80` with `A > 80`,
+  a chain does not push toward SPLIT until its downscaled `M_c(c)` reaches 81
+  (i.e. `M_c_v1 >= 8100`); e.g. `M_c_v1=8099 → floor(8099/100)=80 → 80 > 80 =
+  false`. This exactly mirrors frozen Phase-3 behavior and is NORMATIVE — do NOT
+  reinterpret `HYST_HIGH=80` as `>= 80`.
+- Effective conceptual thresholds: `HYST_LOW=20 ≈ M_c_v1 2000`,
+  `HYST_HIGH=80 ≈ M_c_v1 8000`, without rewriting the controller.
+
+**Overflow bound (NORMATIVE).** All aggregation uses `int64`.
+`sum_{i in W} D_v1 <= W * DEMAND_SCALE`. For the max permitted window this is far
+below `2^63` (`10000 * DEMAND_SCALE = 1e8 << 2^63`), so no overflow for any
+consensus-permitted `W`. Implementations MUST use a width that guarantees
+`sum(D_v1)` cannot overflow for the maximum permitted window.
+
+**Three separate concepts, restated with scaling:**
+```text
+D_v1        per-block demand           stateless          0..DEMAND_SCALE
+M_c_v1      per-chain window aggregate  full precision     0..DEMAND_SCALE
+(boundary)  floor(M_c_v1 / 100)         single downscale   0..100
+A / T_h     controller mean + decision  frozen Phase-3     0..100 -> topology
+```
+This is version-pinned to `TopologyState.nVersion == 1`; changing any of
+`D_v1`, `M_c_v1`, or the downscale REQUIRES a new `nVersion` + activation height.
 
 ---
 
@@ -456,11 +499,12 @@ Phase 5+
    consensus block-weight occupancy (`GetBlockWeight`/`MAX_BLOCK_WEIGHT`,
    `DEMAND_SCALE=10000`, floor rounding, pinned to `nVersion=1`). Still TODO
    within this step before the hook: set concrete `H_derive`/`H_topology`.
-3. **Pure consensus function — no `ConnectBlock` hook.** Introduce
-   `CalculateExpectedTopology` + `TopologyState` serialization/hash + the
-   integer-only `D_v1`→`M_c` aggregation/scaling (§5.5.4) as pure,
-   standalone-testable code. Land replay-equivalence and path-independence tests
-   (§10.1, §10.7) FIRST.
+3. **Pure consensus function — no `ConnectBlock` hook.** Implement, as pure
+   standalone-testable code, the now-FROZEN chain: `D_v1` (§5.5), `M_c_v1`
+   full-precision aggregation + single controller-boundary downscale (§5.5.5),
+   `TopologyState` serialization/hash (§3), and `CalculateExpectedTopology`
+   (reusing the frozen `LitenyxTopoDecide`). Land replay-equivalence and
+   path-independence tests (§10.1, §10.7) FIRST.
 4. **Add authoritative validation hook.** Only after (3) is green, wire
    `VerifyTopologyCommitment` into `ConnectBlock` (§6) behind staged activation
    (§8) and the topology index into `DisconnectBlock` (§7).
