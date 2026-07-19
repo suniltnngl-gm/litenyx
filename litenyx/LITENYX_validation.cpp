@@ -2,6 +2,7 @@
 
 #include "LITENYX_sharedstate.h"
 #include "LITENYX_topology_authority.h"
+#include "LITENYX_chainid_lifecycle.h"
 #include "primitives/transaction.h"
 #include "primitives/block.h"
 #include "consensus/validation.h"
@@ -181,5 +182,74 @@ bool LitenyxCheckTopologyCommitment(const CBlock& block,
         default:
             return state.Invalid(false, 0,
                                  "litenyx-topo-commit-invalid");
+    }
+}
+
+// ---- Phase 5: ChainId-lifecycle-commitment enforcement (spec §6.2/§9) ------
+
+bool LitenyxCheckLifecycleCommitment(const CBlock& block,
+                                     const CBlockIndex* pindexPrev,
+                                     const std::string& netId,
+                                     const Consensus::Params& consensus,
+                                     CValidationState& state)
+{
+    const uint32_t nHeight =
+        (uint32_t)(pindexPrev ? pindexPrev->nHeight + 1 : 0);
+
+    // 1. Phase-5 regime from the frozen INDEPENDENT per-network activation (§8).
+    const LitenyxChainIdActivation act = LitenyxChainIdActivationForNetwork(netId);
+    const LitenyxTopoRegime regime = act.RegimeAt(nHeight);
+
+    // Structural (V3) presence — never a zero sentinel (spec §6.1/§9.1).
+    const bool hasCommit = block.nyx_aux.HasLifecycleCommitment();
+
+    // Fast path: PreDerivation (incl. disabled). No derivation needed; a present
+    // (V3) commitment is premature and rejected, else legacy behavior (§9.1).
+    if (regime == LitenyxTopoRegime::PreDerivation) {
+        const LitenyxCommitVerdict v = LitenyxVerifyLifecycleCommitment(
+            regime, hasCommit, block.nyx_aux.lifecycleCommitment,
+            LitenyxChainIdLifecycleGenesis());
+        if (v == LitenyxCommitVerdict::Invalid) {
+            return state.Invalid(false, 0,
+                                 "litenyx-lifecycle-commit-premature");
+        }
+        return true;
+    }
+
+    // 2. Reconstruct expected L_h from CANONICAL CHAIN HISTORY ALONE (the SAME
+    //    reconstruction Phase 4 uses), folding G over the topology boundaries.
+    std::vector<LitenyxCommittedBlock> chainBlocks;
+    if (!LitenyxBuildCanonicalBlocks(block, pindexPrev, consensus, chainBlocks)) {
+        // Reconstruction inputs unavailable (e.g. pruned body). Active regime:
+        // cannot prove the commitment; fail closed rather than guess.
+        return state.Invalid(false, 0,
+                             "litenyx-lifecycle-reconstruct-unavailable");
+    }
+    LitenyxChainIdLifecycleState expected;
+    if (!LitenyxCalculateExpectedLifecycleFromChain(chainBlocks, nHeight, expected)) {
+        // An impossible topology delta was folded into G (spec §9.9). The block's
+        // canonical history is itself lifecycle-invalid: fail closed.
+        return state.Invalid(false, 0,
+                             "litenyx-lifecycle-derivation-invalid");
+    }
+
+    // 3. Pure verification (spec §9.1 presence x regime matrix).
+    const LitenyxCommitVerdict verdict = LitenyxVerifyLifecycleCommitment(
+        regime, hasCommit, block.nyx_aux.lifecycleCommitment, expected);
+
+    // 4. Map verdict to consensus result.
+    switch (verdict) {
+        case LitenyxCommitVerdict::Valid:
+            return true;
+        case LitenyxCommitVerdict::AdvisoryMismatch:
+            try {
+                LogPrintf("Litenyx: lifecycle commitment advisory mismatch at "
+                          "height %u (soft regime)\n", nHeight);
+            } catch (...) {}
+            return true;
+        case LitenyxCommitVerdict::Invalid:
+        default:
+            return state.Invalid(false, 0,
+                                 "litenyx-lifecycle-commit-invalid");
     }
 }

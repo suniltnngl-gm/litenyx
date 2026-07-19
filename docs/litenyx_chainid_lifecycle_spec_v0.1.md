@@ -549,8 +549,18 @@ Rules (NORMATIVE, mirroring Phase 4 §8.1):
   (validated at params construction). Enforcement (`H_cid_enforce`) SHOULD be at
   or after Phase-4 `H_topology`.
 
-Concrete per-network values are pinned when the engine + hook are implemented
-(regtest chosen to cross both boundaries cheaply in CI; mainnet DISABLED).
+Concrete per-network values (FROZEN at the hook step; regtest crosses both
+boundaries cheaply in CI; mainnet DISABLED):
+
+| Network | `H_cid_derive` | `H_cid_enforce` | Note |
+|---------|----------------|-----------------|------|
+| regtest | 200 | 400 | `>=` Phase-4 regtest (`H_derive=100`, `H_topology=300`); both crossed in one CI run |
+| test    | 1000 | 3000 | `>=` Phase-4 testnet (`500`/`1500`) |
+| main    | DISABLED | DISABLED | deliberate future release decision |
+
+Constraint validated at params construction (§8 rules): regtest/test satisfy
+`H_derive(phase4) <= H_cid_derive <= H_cid_enforce`, and `H_cid_enforce` is at or
+after Phase-4 `H_topology`.
 
 ---
 
@@ -579,6 +589,32 @@ The following are CONSENSUS-INVALID and MUST propagate `return false`:
 
 Observational bookkeeping failures remain contained and MUST NOT invalidate a
 block.
+
+### 9.1 Commitment presence × regime — the unambiguous outcome (FROZEN)
+
+`HasLifecycleCommitment()` is a STRUCTURAL wire fact (`magic == V3`, §6.1), never
+inferred from a zero value. Its consensus outcome is fully determined at EVERY
+height by the regime (§8), with NO height at which absence silently means "skip
+Phase-5 validation" indefinitely. This mirrors the frozen Phase-4 topology rule
+(topology spec §9 / `LitenyxVerifyTopologyCommitment`) exactly:
+
+| Regime | `HasLifecycleCommitment()==false` (V0/V1/V2 block) | `==true` (V3 block) |
+|--------|----------------------------------------------------|---------------------|
+| Pre-derivation (`h < H_cid_derive`, incl. DISABLED) | **Valid** (legacy; no derivation) | **Invalid** — premature commitment, `return false` |
+| Soft / advisory (`H_cid_derive <= h < H_cid_enforce`) | **Valid** (accept; no commitment to compare) | match → **Valid**; mismatch → **AdvisoryMismatch** (warn, accept) |
+| Hard / authoritative (`h >= H_cid_enforce`) | **Invalid** — missing mandatory commitment, `return false` | match → **Valid**; mismatch → **Invalid**, `return false` |
+
+This is `LitenyxVerifyLifecycleCommitment(regime, hasCommitment, commitment,
+expectedL_h)`, a pure decision with the identical shape to
+`LitenyxVerifyTopologyCommitment`. It CLOSES the carrier-to-consensus bypass: a
+block can never route around a failed/absent Phase-4 topology commitment by
+omitting the Phase-5 field, because (a) the Phase-5 check runs strictly AFTER the
+Phase-4 check has already returned `true` (§6.2 ordering), and (b) in the hard
+regime a missing lifecycle commitment is itself `Invalid`.
+
+> A V3 block additionally carries the V2 topologyCommitment (§6.1), so it is
+> subject to the FROZEN Phase-4 topology check FIRST and unchanged. Phase 5 adds
+> a strictly ADDITIONAL fail-closed gate; it never relaxes Phase 4.
 
 ---
 
@@ -614,7 +650,14 @@ required proofs:
     into `dogecoind` via the production patch path AND exercised on the real
     consensus path in CI (regtest crossing `H_cid_derive` and `H_cid_enforce`),
     not merely in standalone proofs. Without this, `phase5-green` MUST NOT be
-    tagged.
+    tagged. Mechanism: `ConnectBlock` calls `LitenyxCheckLifecycleCommitment`
+    (`litenyx-validation.patch`, ordered strictly after the Phase-4 topology
+    check per §6.2), and the regtest-only `testlitenyxlifecycle` RPC
+    (`litenyx-rpc.patch`) drives the SAME compiled engine functions
+    (`LitenyxCalculateExpectedLifecycleFromChain` /
+    `LitenyxVerifyLifecycleCommitment`) so a deliberately corrupted commitment
+    is rejected on the real consensus path — verified by the
+    `test_phase5_*` cases in `tests/regtest/test_litenyx_splitmerge.py`.
 
 ### 10.1 Flagship vector — the identity distinction (MANDATORY)
 

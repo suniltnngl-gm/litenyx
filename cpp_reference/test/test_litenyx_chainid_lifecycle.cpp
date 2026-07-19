@@ -342,3 +342,144 @@ BOOST_AUTO_TEST_CASE(p9_path_independence) {
         BOOST_CHECK(HashSeq(cont) == HashSeq(seqA));
     }
 }
+
+// --------------------------------------------------------------------------
+// P10: canonical-chain lifecycle derivation (spec §6.2) is layered EXACTLY on
+// the frozen Phase-4 topology derivation, and is path-independent.
+// --------------------------------------------------------------------------
+BOOST_AUTO_TEST_CASE(p10_from_chain_derivation_layers_on_topology) {
+    const uint32_t W = LITENYX_TOPOLOGY_OBS_WINDOW;
+    const uint32_t tip = 5 * W; // five observation-window boundaries
+
+    // Saturated demand on lane 0 across every window drives SPLIT decisions; the
+    // exact nN path is whatever the FROZEN topology authority decides. We assert
+    // the lifecycle tracks that authority — we do NOT hardcode thresholds.
+    std::vector<LitenyxCommittedBlock> blocks((size_t)tip);
+    for (uint32_t h = 1; h <= tip; ++h) {
+        LitenyxCommittedBlock b;
+        b.chainId = 0;
+        b.blockWeight = LITENYX_MAX_BLOCK_WEIGHT; // full demand
+        blocks[h - 1] = b;
+    }
+
+    LitenyxTopologyState topoTip =
+        LitenyxCalculateExpectedTopologyFromChain(
+            LitenyxTopologyState::Genesis(), blocks, tip);
+
+    LitenyxChainIdLifecycleState lifeTip;
+    bool ok = LitenyxCalculateExpectedLifecycleFromChain(blocks, tip, lifeTip);
+    BOOST_REQUIRE(ok);
+
+    // Layering invariant (spec §0.1): active-lane count == topology nN, and the
+    // lane set is the contiguous prefix {0..nN-1}.
+    BOOST_CHECK_EQUAL(lifeTip.activeBindings.size(), (size_t)topoTip.nN);
+    BOOST_CHECK(LitenyxLifecycleStateCoherent(lifeTip, topoTip.nN));
+
+    // Path independence (spec §0.4): re-deriving from the same canonical blocks
+    // (any number of times / any earlier truncation) yields the identical hash.
+    LitenyxChainIdLifecycleState again;
+    BOOST_REQUIRE(LitenyxCalculateExpectedLifecycleFromChain(blocks, tip, again));
+    unsigned char h1[32], h2[32];
+    LitenyxLifecycleStateHash(lifeTip, h1);
+    LitenyxLifecycleStateHash(again, h2);
+    BOOST_CHECK_EQUAL(HexOf(h1), HexOf(h2));
+
+    // Disconnect/reconnect: derive to an earlier boundary, then to the tip; the
+    // tip result is identical to the uninterrupted derivation.
+    LitenyxChainIdLifecycleState midThenTip;
+    LitenyxChainIdLifecycleState mid;
+    BOOST_REQUIRE(LitenyxCalculateExpectedLifecycleFromChain(blocks, 3 * W, mid));
+    BOOST_REQUIRE(LitenyxCalculateExpectedLifecycleFromChain(blocks, tip, midThenTip));
+    unsigned char h3[32];
+    LitenyxLifecycleStateHash(midThenTip, h3);
+    BOOST_CHECK_EQUAL(HexOf(h3), HexOf(h1));
+
+    // The expected commitment equals the raw LifecycleStateHash (domain-less).
+    uint256 commit = LitenyxExpectedLifecycleCommitment(lifeTip);
+    BOOST_CHECK_EQUAL(HexOf(commit.data), HexOf(h1));
+}
+
+// --------------------------------------------------------------------------
+// P11: LitenyxVerifyLifecycleCommitment — the §9.1 presence x regime matrix.
+// Closes the carrier-to-consensus bypass (absence is never a silent skip).
+// --------------------------------------------------------------------------
+BOOST_AUTO_TEST_CASE(p11_verify_commitment_regime_matrix) {
+    LitenyxChainIdLifecycleState L0 = LitenyxChainIdLifecycleGenesis();
+    uint256 correct = LitenyxExpectedLifecycleCommitment(L0);
+    uint256 wrong; wrong.data[0] = (unsigned char)(correct.data[0] ^ 0xFF);
+
+    // PreDerivation: absent -> Valid; present (any value) -> Invalid (premature).
+    BOOST_CHECK(LitenyxVerifyLifecycleCommitment(
+        LitenyxTopoRegime::PreDerivation, false, uint256(), L0)
+        == LitenyxCommitVerdict::Valid);
+    BOOST_CHECK(LitenyxVerifyLifecycleCommitment(
+        LitenyxTopoRegime::PreDerivation, true, correct, L0)
+        == LitenyxCommitVerdict::Invalid);
+
+    // SoftAdvisory: absent -> Valid; correct -> Valid; mismatch -> AdvisoryMismatch.
+    BOOST_CHECK(LitenyxVerifyLifecycleCommitment(
+        LitenyxTopoRegime::SoftAdvisory, false, uint256(), L0)
+        == LitenyxCommitVerdict::Valid);
+    BOOST_CHECK(LitenyxVerifyLifecycleCommitment(
+        LitenyxTopoRegime::SoftAdvisory, true, correct, L0)
+        == LitenyxCommitVerdict::Valid);
+    BOOST_CHECK(LitenyxVerifyLifecycleCommitment(
+        LitenyxTopoRegime::SoftAdvisory, true, wrong, L0)
+        == LitenyxCommitVerdict::AdvisoryMismatch);
+
+    // HardAuthority: absent -> Invalid; correct -> Valid; mismatch -> Invalid.
+    BOOST_CHECK(LitenyxVerifyLifecycleCommitment(
+        LitenyxTopoRegime::HardAuthority, false, uint256(), L0)
+        == LitenyxCommitVerdict::Invalid);
+    BOOST_CHECK(LitenyxVerifyLifecycleCommitment(
+        LitenyxTopoRegime::HardAuthority, true, correct, L0)
+        == LitenyxCommitVerdict::Valid);
+    BOOST_CHECK(LitenyxVerifyLifecycleCommitment(
+        LitenyxTopoRegime::HardAuthority, true, wrong, L0)
+        == LitenyxCommitVerdict::Invalid);
+}
+
+// --------------------------------------------------------------------------
+// P12: staged independent Phase-5 activation (spec §8) — frozen heights,
+// regime boundaries, well-formedness, and the Phase-4 dependency.
+// --------------------------------------------------------------------------
+BOOST_AUTO_TEST_CASE(p12_activation_regimes_and_frozen_heights) {
+    // Frozen regtest heights (spec §8 table).
+    LitenyxChainIdActivation rt = LitenyxChainIdActivationForNetwork("regtest");
+    BOOST_CHECK_EQUAL(rt.hDerive, 200u);
+    BOOST_CHECK_EQUAL(rt.hEnforce, 400u);
+    BOOST_CHECK(rt.WellFormed());
+    BOOST_CHECK(!rt.IsDisabled());
+
+    // Regime boundaries: [.., 200) pre; [200,400) soft; [400, ..) hard.
+    BOOST_CHECK(rt.RegimeAt(199) == LitenyxTopoRegime::PreDerivation);
+    BOOST_CHECK(rt.RegimeAt(200) == LitenyxTopoRegime::SoftAdvisory);
+    BOOST_CHECK(rt.RegimeAt(399) == LitenyxTopoRegime::SoftAdvisory);
+    BOOST_CHECK(rt.RegimeAt(400) == LitenyxTopoRegime::HardAuthority);
+    BOOST_CHECK(rt.RegimeAt(100000) == LitenyxTopoRegime::HardAuthority);
+
+    // Mainnet DISABLED => PreDerivation at every height (dormant).
+    LitenyxChainIdActivation mn = LitenyxChainIdActivationForNetwork("main");
+    BOOST_CHECK(mn.IsDisabled());
+    BOOST_CHECK(mn.WellFormed()); // both-disabled coupling holds
+    BOOST_CHECK(mn.RegimeAt(0) == LitenyxTopoRegime::PreDerivation);
+    BOOST_CHECK(mn.RegimeAt(0xFFFFFFF0u) == LitenyxTopoRegime::PreDerivation);
+
+    // Unknown network defaults to DISABLED (fail-safe).
+    BOOST_CHECK(LitenyxChainIdActivationForNetwork("bogus").IsDisabled());
+
+    // Phase-4 dependency (spec §8): H_cid_derive >= Phase-4 H_derive and
+    // H_cid_enforce at/after Phase-4 H_topology, on every enabled network.
+    LitenyxTopoActivation p4rt = LitenyxTopoActivationForNetwork("regtest");
+    BOOST_CHECK(rt.hDerive >= p4rt.hDerive);
+    BOOST_CHECK(rt.hEnforce >= p4rt.hTopology);
+    LitenyxChainIdActivation tn = LitenyxChainIdActivationForNetwork("test");
+    LitenyxTopoActivation p4tn = LitenyxTopoActivationForNetwork("test");
+    BOOST_CHECK(tn.WellFormed());
+    BOOST_CHECK(tn.hDerive >= p4tn.hDerive);
+    BOOST_CHECK(tn.hEnforce >= p4tn.hTopology);
+
+    // Ill-formed guards: 0 < H_derive, and H_derive <= H_enforce.
+    BOOST_CHECK(!LitenyxChainIdActivation(0, 100).WellFormed());
+    BOOST_CHECK(!LitenyxChainIdActivation(400, 200).WellFormed());
+}

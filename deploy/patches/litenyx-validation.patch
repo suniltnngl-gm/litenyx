@@ -36,7 +36,7 @@ index 97d4ff5..9fef3cf 100644
      // move best block pointer to prevout block
      view.SetBestBlock(pindex->pprev->GetBlockHash());
  
-@@ -2033,6 +2053,50 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
+@@ -2033,6 +2053,64 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
      // add this block to the view's block chain
      view.SetBestBlock(pindex->GetBlockHash());
  
@@ -58,6 +58,20 @@ index 97d4ff5..9fef3cf 100644
 +    if (!LitenyxCheckTopologyCommitment(block, pindex->pprev,
 +                                        Params().NetworkIDString(),
 +                                        Params().GetConsensus(pindex->nHeight), state)) {
++        return false;
++    }
++
++    // Litenyx Phase 5: consensus-authoritative ChainId-lifecycle commitment.
++    // CONSENSUS-CRITICAL, MUST NOT be wrapped in try/catch. Runs STRICTLY AFTER
++    // the frozen Phase-4 topology check above has already returned true, so a
++    // block can never route around a failed/absent topology commitment by
++    // omitting the Phase-5 field (spec §6.2 ordering, §9.1 bypass closure).
++    // Expected L_h is derived from CANONICAL CHAIN HISTORY ALONE, folding G over
++    // the topology boundaries. PreDerivation preserves legacy behavior;
++    // SoftAdvisory reports-but-accepts; HardAuthority fails closed.
++    if (!LitenyxCheckLifecycleCommitment(block, pindex->pprev,
++                                         Params().NetworkIDString(),
++                                         Params().GetConsensus(pindex->nHeight), state)) {
 +        return false;
 +    }
 +

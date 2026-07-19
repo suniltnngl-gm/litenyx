@@ -19,6 +19,7 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <string>
 #include <vector>
 
 #include "LITENYX_types.h"
@@ -27,6 +28,62 @@
 
 // Lifecycle-state schema version (spec §3). Independent of topology nVersion.
 static const uint16_t LITENYX_LIFECYCLE_STATE_VERSION = 1;
+
+// ---- Staged, INDEPENDENT Phase-5 activation (spec §8) ----------------------
+// Reuses the frozen Phase-4 three-regime machinery (LitenyxTopoRegime) but with
+// its OWN per-network heights (H_cid_derive / H_cid_enforce). DISABLED shares
+// the Phase-4 "never" sentinel value/name so tests read identically.
+static const uint32_t LITENYX_CHAINID_ACTIVATION_DISABLED =
+    LITENYX_TOPO_ACTIVATION_DISABLED;
+
+struct LitenyxChainIdActivation {
+    uint32_t hDerive;   // H_cid_derive
+    uint32_t hEnforce;  // H_cid_enforce
+
+    LitenyxChainIdActivation()
+        : hDerive(LITENYX_CHAINID_ACTIVATION_DISABLED),
+          hEnforce(LITENYX_CHAINID_ACTIVATION_DISABLED) {}
+    LitenyxChainIdActivation(uint32_t d, uint32_t e) : hDerive(d), hEnforce(e) {}
+
+    bool IsDisabled() const { return hDerive == LITENYX_CHAINID_ACTIVATION_DISABLED; }
+
+    // §8 ordering rules, incl. both-disabled coupling and 0 < H_derive.
+    bool WellFormed() const {
+        if (hDerive == LITENYX_CHAINID_ACTIVATION_DISABLED)
+            return hEnforce == LITENYX_CHAINID_ACTIVATION_DISABLED;
+        if (hDerive == 0) return false;
+        return hDerive <= hEnforce;
+    }
+
+    LitenyxTopoRegime RegimeAt(uint32_t h) const {
+        if (IsDisabled() || h < hDerive) return LitenyxTopoRegime::PreDerivation;
+        if (h < hEnforce)                return LitenyxTopoRegime::SoftAdvisory;
+        return LitenyxTopoRegime::HardAuthority;
+    }
+};
+
+// Frozen per-network Phase-5 activations (spec §8 table). regtest crosses both
+// boundaries cheaply in CI; mainnet DISABLED (deliberate future decision). Each
+// satisfies the §8 dependency on Phase 4 (H_cid_derive >= Phase-4 H_derive;
+// H_cid_enforce at/after Phase-4 H_topology).
+inline LitenyxChainIdActivation LitenyxChainIdActivationRegtest() {
+    return LitenyxChainIdActivation(200, 400);
+}
+inline LitenyxChainIdActivation LitenyxChainIdActivationTestnet() {
+    return LitenyxChainIdActivation(1000, 3000);
+}
+inline LitenyxChainIdActivation LitenyxChainIdActivationMainnet() {
+    return LitenyxChainIdActivation(LITENYX_CHAINID_ACTIVATION_DISABLED,
+                                    LITENYX_CHAINID_ACTIVATION_DISABLED);
+}
+inline LitenyxChainIdActivation LitenyxChainIdActivationForNetwork(
+    const std::string& netId) {
+    if (netId == "regtest") return LitenyxChainIdActivationRegtest();
+    if (netId == "test")    return LitenyxChainIdActivationTestnet();
+    if (netId == "main")    return LitenyxChainIdActivationMainnet();
+    return LitenyxChainIdActivation(LITENYX_CHAINID_ACTIVATION_DISABLED,
+                                    LITENYX_CHAINID_ACTIVATION_DISABLED);
+}
 
 // A single active binding: a TopologyLaneId (positional, reusable) mapped to a
 // persistent, never-recycled ChainId (spec §0.1, §3).
@@ -272,6 +329,97 @@ inline LitenyxValidatedExecutionContext LitenyxValidateExecutionContext(
         }
     }
     return ctx;
+}
+
+// ---- Canonical-chain lifecycle derivation (spec §6.2, PURE) ----------------
+// The AUTHORITATIVE reconstruction of L_h from the canonical block sequence
+// ALONE, layered EXACTLY on the frozen Phase-4 topology derivation. It folds G
+// over the SAME OBS_WINDOW boundaries the topology authority uses: at each
+// boundary the topology nN may move by +/-1, and G consumes that N_{h-1}->N_h
+// scalar (spec §0.1). Path-independent by construction (reads canonical heights
+// in ascending order; no tracker/cache/arrival-order dependence, spec §0.4).
+//
+// Returns false (fail closed) if any boundary transition is rejected by G
+// (§4.1/§9) — e.g. an impossible topology delta smuggled into the chain.
+inline bool LitenyxCalculateExpectedLifecycleFromChain(
+    const std::vector<LitenyxCommittedBlock>& chainBlocks, // index == height-1
+    uint32_t tipHeight,
+    LitenyxChainIdLifecycleState& out)
+{
+    const uint32_t W = LITENYX_TOPOLOGY_OBS_WINDOW;
+    if (tipHeight > chainBlocks.size())
+        tipHeight = (uint32_t)chainBlocks.size();
+
+    LitenyxTopologyState topo = LitenyxTopologyState::Genesis();
+    LitenyxChainIdLifecycleState life = LitenyxChainIdLifecycleGenesis();
+
+    for (uint32_t h = W; h <= tipHeight; h += W) {
+        const uint8_t Nprev = topo.nN;
+
+        // Advance the FROZEN topology authority by exactly one boundary.
+        std::vector<LitenyxCommittedBlock> window;
+        window.reserve(W);
+        for (uint32_t g = h - W + 1; g <= h; ++g)
+            window.push_back(chainBlocks[g - 1]);
+        std::vector<int32_t> mcV1 = LitenyxReconstructMcV1Window(window, topo.nN);
+        topo = LitenyxDeriveTopologyAtBoundary(topo, h, mcV1);
+
+        const uint8_t Ncur = topo.nN;
+
+        // Fold G at this boundary, consuming the topology N_{h-1}->N_h scalar.
+        LitenyxChainIdLifecycleState next;
+        if (!LitenyxAdvanceChainIdLifecycle(life, Nprev, Ncur, h, next))
+            return false; // impossible transition; fail closed (spec §9.9)
+        life = next;
+    }
+
+    out = life;
+    return true;
+}
+
+// ExpectedLifecycleCommitment: the value carried in
+// LitenyxAuxHeader.lifecycleCommitment IS the frozen LifecycleStateHash of the
+// expected L_h (spec §6.1). Domain-less, symmetric with the Phase-4 topology
+// commitment. No second hash domain is introduced.
+inline uint256 LitenyxExpectedLifecycleCommitment(
+    const LitenyxChainIdLifecycleState& L)
+{
+    uint256 out;
+    LitenyxLifecycleStateHash(L, out.begin());
+    return out;
+}
+
+// VerifyLifecycleCommitment (spec §9.1): pure regime decision, IDENTICAL in
+// shape to LitenyxVerifyTopologyCommitment. Presence is the STRUCTURAL V3 fact;
+// value is the 32 committed bytes; validity is decided per regime. Reuses the
+// Phase-4 LitenyxCommitVerdict / LitenyxTopoRegime enums (single source of the
+// three-regime semantics).
+inline LitenyxCommitVerdict LitenyxVerifyLifecycleCommitment(
+    LitenyxTopoRegime regime,
+    bool hasCommitment,
+    const uint256& commitment,
+    const LitenyxChainIdLifecycleState& expected)
+{
+    const bool matches =
+        hasCommitment && (commitment == LitenyxExpectedLifecycleCommitment(expected));
+
+    switch (regime) {
+        case LitenyxTopoRegime::PreDerivation:
+            // No lifecycle semantics yet; a present commitment is premature.
+            return hasCommitment ? LitenyxCommitVerdict::Invalid
+                                 : LitenyxCommitVerdict::Valid;
+
+        case LitenyxTopoRegime::SoftAdvisory:
+            if (!hasCommitment) return LitenyxCommitVerdict::Valid;
+            return matches ? LitenyxCommitVerdict::Valid
+                           : LitenyxCommitVerdict::AdvisoryMismatch;
+
+        case LitenyxTopoRegime::HardAuthority:
+            if (!hasCommitment) return LitenyxCommitVerdict::Invalid;
+            return matches ? LitenyxCommitVerdict::Valid
+                           : LitenyxCommitVerdict::Invalid;
+    }
+    return LitenyxCommitVerdict::Invalid; // unreachable; fail closed
 }
 
 #endif // LITENYX_CHAINID_LIFECYCLE_H
