@@ -286,10 +286,13 @@ L_0 = { nVersion=1, nextChainId=2,
         lastLifecycleHeight=0 }
 ```
 
-> `LifecycleStateHash(L_0)` is the genesis KAT, pinned in the engine step (§13.2)
-> against the exact bytes of `SerializeLifecycleState(L_0)`. Because L2 holds
-> (§3.3), ChainIds `{0,1}` are Active and `nextChainId=2` marks all `>= 2` as
-> Nonexistent at genesis.
+> `LifecycleStateHash(L_0)` is the genesis KAT (FROZEN at the engine step). With
+> `MIN_CHAINS=2`, `SerializeLifecycleState(L_0)` is the 21 bytes
+> `010002000000020000000000010100000000000000`, and
+> `LifecycleStateHash(L_0) =`
+> `ca5225a14fe2d5da35823650bb25c43edf63a459f56153b8f0570eb17302c9e1`.
+> Because L2 holds (§3.3), ChainIds `{0,1}` are Active and `nextChainId=2` marks
+> all `>= 2` as Nonexistent at genesis.
 
 `G` is pure: `G(L_{h-1}, N_{h-1}, N_h, h)` (with `N := nN`) always yields the same
 `L_h`. Because `LitenyxTopoApply` moves `nN` by exactly `+/-1`, the delta
