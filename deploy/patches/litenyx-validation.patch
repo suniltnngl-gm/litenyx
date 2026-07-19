@@ -36,7 +36,7 @@ index 97d4ff5..9fef3cf 100644
      // move best block pointer to prevout block
      view.SetBestBlock(pindex->pprev->GetBlockHash());
  
-@@ -2033,6 +2053,64 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
+@@ -2033,6 +2053,77 @@ bool ConnectBlock(const CBlock& block, CValidationState& state, CBlockIndex* pin
      // add this block to the view's block chain
      view.SetBestBlock(pindex->GetBlockHash());
  
@@ -72,6 +72,19 @@ index 97d4ff5..9fef3cf 100644
 +    if (!LitenyxCheckLifecycleCommitment(block, pindex->pprev,
 +                                         Params().NetworkIDString(),
 +                                         Params().GetConsensus(pindex->nHeight), state)) {
++        return false;
++    }
++
++    // Litenyx Phase 6: consensus-authoritative EXECUTION AUTHORITY. CONSENSUS-
++    // CRITICAL, MUST NOT be wrapped in try/catch. Runs STRICTLY AFTER the Phase-5
++    // lifecycle check, so a block cannot route around lifecycle enforcement. It
++    // CONSUMES (never reinterprets) the pure Phase-6 engine: the block's asserted
++    // TopologyLaneId is resolved to its authoritative PersistentChainId on L_h;
++    // AUTHORIZED may proceed, while REVOKED/UNKNOWN/wrong-lane/malformed fail
++    // closed in HardAuthority (SoftAdvisory reports-but-accepts).
++    if (!LitenyxCheckExecutionAuthority(block, pindex->pprev,
++                                        Params().NetworkIDString(),
++                                        Params().GetConsensus(pindex->nHeight), state)) {
 +        return false;
 +    }
 +

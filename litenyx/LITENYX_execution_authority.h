@@ -26,8 +26,43 @@
 
 #include <cstdint>
 
+#include <string>
+
 #include "LITENYX_topology.h"            // LITENYX_TOPO_MAX_CHAINS
 #include "LITENYX_chainid_lifecycle.h"   // LitenyxValidateExecutionContext, status, activation
+
+// ---- §6 Staged, INDEPENDENT Phase-6 activation ------------------------------
+// Reuses the frozen three-regime machinery (LitenyxTopoRegime /
+// LitenyxChainIdActivation shape) with its OWN per-network heights
+// (H_exec_derive / H_exec_enforce). Dependency (spec §6, FROZEN):
+//   H_exec_derive  >= Phase-5 H_cid_derive   and
+//   H_exec_enforce >= Phase-5 H_cid_enforce
+// so execution authority never enforces before the identities it authorizes are
+// themselves under lifecycle enforcement. DISABLED shares the frozen sentinel.
+static const uint32_t LITENYX_EXEC_ACTIVATION_DISABLED =
+    LITENYX_CHAINID_ACTIVATION_DISABLED;
+
+// regtest crosses both boundaries cheaply in one CI run and strictly AFTER the
+// Phase-5 regtest boundaries {200,400}; test after Phase-5 {1000,3000}; main
+// DISABLED (deliberate future decision, as Phase 4/5).
+inline LitenyxChainIdActivation LitenyxExecutionActivationRegtest() {
+    return LitenyxChainIdActivation(600, 800);
+}
+inline LitenyxChainIdActivation LitenyxExecutionActivationTestnet() {
+    return LitenyxChainIdActivation(4000, 6000);
+}
+inline LitenyxChainIdActivation LitenyxExecutionActivationMainnet() {
+    return LitenyxChainIdActivation(LITENYX_EXEC_ACTIVATION_DISABLED,
+                                    LITENYX_EXEC_ACTIVATION_DISABLED);
+}
+inline LitenyxChainIdActivation LitenyxExecutionActivationForNetwork(
+    const std::string& netId) {
+    if (netId == "regtest") return LitenyxExecutionActivationRegtest();
+    if (netId == "test")    return LitenyxExecutionActivationTestnet();
+    if (netId == "main")    return LitenyxExecutionActivationMainnet();
+    return LitenyxChainIdActivation(LITENYX_EXEC_ACTIVATION_DISABLED,
+                                    LITENYX_EXEC_ACTIVATION_DISABLED);
+}
 
 // ---- §3 ExecutionAuthorityState (derived projection; NEVER serialized) ------
 // Total, injective projection of the frozen Phase-5 LitenyxChainIdStatus.
@@ -160,6 +195,44 @@ inline LitenyxExecutionAuthorityResult LitenyxResolveExecutionAuthority(
         r.code   = LitenyxExecutionAuthorityCode::WrongLane;
     }
     return r;
+}
+
+// ---- Block-boundary adapter (mechanical; NOT a second authority engine) -----
+// A block asserts only its TopologyLaneId (LITENYX_auxpow chainId field = a lane
+// position, spec §1.1). The AUTHORITATIVE PersistentChainId is whichever identity
+// L_h binds to that lane; the block never carries it (no new carrier state —
+// out of scope). This adapter performs the lane->PersistentChainId lookup on L_h
+// ALONE and then defers the ENTIRE decision to LitenyxResolveExecutionAuthority.
+// It adds no authority logic: it only supplies the (chainId, lane) pair the pure
+// engine already expects, so the frozen precedence (Malformed > Premature >
+// Unknown/Revoked/WrongLane) and projection are unchanged.
+//
+// Lookup outcomes:
+//   - lane >= TOPO_MAX_CHAINS         -> engine returns Malformed (F5).
+//   - lane not bound in L_h (>= N_h)  -> no active identity owns this lane; we
+//                                        assert the sentinel nextChainId, which
+//                                        is >= nextChainId => engine Unknown (F1).
+//                                        (A lane with no binding cannot route.)
+//   - lane bound to chainId c         -> engine resolves c on lane; agreement is
+//                                        guaranteed by construction => Ok, unless
+//                                        Premature by regime.
+inline LitenyxExecutionAuthorityResult LitenyxResolveExecutionAuthorityForLane(
+    const LitenyxChainIdLifecycleState& L,
+    uint32_t laneId,
+    uint32_t height,
+    LitenyxTopoRegime regime)
+{
+    // Find the PersistentChainId bound to this lane in L_h (L1 uniqueness).
+    // If unbound, assert the nextChainId sentinel so the pure engine classifies
+    // it Nonexistent (Unknown) — never silently accept an unowned lane.
+    uint32_t assertedChainId = L.nextChainId; // sentinel: nonexistent by construction
+    for (size_t i = 0; i < L.activeBindings.size(); ++i) {
+        if ((uint32_t)L.activeBindings[i].laneId == laneId) {
+            assertedChainId = L.activeBindings[i].chainId;
+            break;
+        }
+    }
+    return LitenyxResolveExecutionAuthority(L, assertedChainId, laneId, height, regime);
 }
 
 #endif // LITENYX_EXECUTION_AUTHORITY_H

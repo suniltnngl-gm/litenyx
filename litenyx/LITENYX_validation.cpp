@@ -3,6 +3,7 @@
 #include "LITENYX_sharedstate.h"
 #include "LITENYX_topology_authority.h"
 #include "LITENYX_chainid_lifecycle.h"
+#include "LITENYX_execution_authority.h"
 #include "primitives/transaction.h"
 #include "primitives/block.h"
 #include "consensus/validation.h"
@@ -251,5 +252,84 @@ bool LitenyxCheckLifecycleCommitment(const CBlock& block,
         default:
             return state.Invalid(false, 0,
                                  "litenyx-lifecycle-commit-invalid");
+    }
+}
+
+// ---- Phase 6: execution-authority enforcement (spec §4/§5/§6) --------------
+// CONSUMES the pure Phase-6 engine result; NEVER reinterprets it and NEVER
+// reconstructs topology/lifecycle/lane/allocation itself (it reuses the SAME
+// canonical-chain reconstruction Phase 4/5 use). Ordered STRICTLY AFTER the
+// Phase-5 lifecycle check by ConnectBlock, so a block cannot route around it.
+
+bool LitenyxCheckExecutionAuthority(const CBlock& block,
+                                    const CBlockIndex* pindexPrev,
+                                    const std::string& netId,
+                                    const Consensus::Params& consensus,
+                                    CValidationState& state)
+{
+    const uint32_t nHeight =
+        (uint32_t)(pindexPrev ? pindexPrev->nHeight + 1 : 0);
+
+    // 1. Phase-6 regime from the frozen INDEPENDENT per-network activation (§6).
+    const LitenyxChainIdActivation act = LitenyxExecutionActivationForNetwork(netId);
+    const LitenyxTopoRegime regime = act.RegimeAt(nHeight);
+
+    // Fast path: PreDerivation (incl. disabled) preserves legacy behavior.
+    // Execution authority is dormant; no derivation, no gate (spec §6).
+    if (regime == LitenyxTopoRegime::PreDerivation) {
+        return true;
+    }
+
+    // 2. Reconstruct expected L_h from CANONICAL CHAIN HISTORY ALONE (identical
+    //    to Phase 4/5). The hook does not derive lifecycle/lanes on its own.
+    std::vector<LitenyxCommittedBlock> chainBlocks;
+    if (!LitenyxBuildCanonicalBlocks(block, pindexPrev, consensus, chainBlocks)) {
+        return state.Invalid(false, 0,
+                             "litenyx-exec-reconstruct-unavailable");
+    }
+    LitenyxChainIdLifecycleState expected;
+    if (!LitenyxCalculateExpectedLifecycleFromChain(chainBlocks, nHeight, expected)) {
+        return state.Invalid(false, 0,
+                             "litenyx-exec-derivation-invalid");
+    }
+
+    // 3. The block asserts only its TopologyLaneId (nyx_aux.chainId). Resolve it
+    //    to the authoritative PersistentChainId on L_h and CONSUME the pure
+    //    engine decision (never infer authority from the claimed lane alone).
+    const uint32_t assertedLane = block.nyx_aux.chainId;
+    const LitenyxExecutionAuthorityResult res =
+        LitenyxResolveExecutionAuthorityForLane(expected, assertedLane, nHeight, regime);
+
+    // 4. SoftAdvisory: reportable, never fatal (spec §6). A non-Ok decision is
+    //    surfaced but the block is accepted.
+    if (regime == LitenyxTopoRegime::SoftAdvisory) {
+        if (res.code != LitenyxExecutionAuthorityCode::Ok) {
+            try {
+                LogPrintf("Litenyx: execution-authority advisory (code=%d) at "
+                          "height %u lane %u (soft regime)\n",
+                          (int)res.code, nHeight, assertedLane);
+            } catch (...) {}
+        }
+        return true;
+    }
+
+    // 5. HardAuthority: AUTHORIZED (Ok) may proceed subject to later independent
+    //    gates; every other frozen code deterministically REJECTS with a DISTINCT
+    //    reason. The pure engine already enforces precedence Malformed >
+    //    Premature > Unknown/Revoked/WrongLane; the hook only maps it.
+    switch (res.code) {
+        case LitenyxExecutionAuthorityCode::Ok:
+            return true;
+        case LitenyxExecutionAuthorityCode::Unknown:
+            return state.Invalid(false, 0, "litenyx-exec-unknown");
+        case LitenyxExecutionAuthorityCode::Revoked:
+            return state.Invalid(false, 0, "litenyx-exec-revoked");
+        case LitenyxExecutionAuthorityCode::WrongLane:
+            return state.Invalid(false, 0, "litenyx-exec-wrong-lane");
+        case LitenyxExecutionAuthorityCode::Premature:
+            return state.Invalid(false, 0, "litenyx-exec-premature");
+        case LitenyxExecutionAuthorityCode::Malformed:
+        default:
+            return state.Invalid(false, 0, "litenyx-exec-malformed");
     }
 }

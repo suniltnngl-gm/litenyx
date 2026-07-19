@@ -55,6 +55,7 @@ inject-hooks: clone-dogecoin
 	@cp $(REPO_ROOT)/litenyx/LITENYX_topology.h $(DOGECOIN_DIR)/src/litenyx/LITENYX_topology.h
 	@cp $(REPO_ROOT)/litenyx/LITENYX_topology_authority.h $(DOGECOIN_DIR)/src/litenyx/LITENYX_topology_authority.h
 	@cp $(REPO_ROOT)/litenyx/LITENYX_chainid_lifecycle.h $(DOGECOIN_DIR)/src/litenyx/LITENYX_chainid_lifecycle.h
+	@cp $(REPO_ROOT)/litenyx/LITENYX_execution_authority.h $(DOGECOIN_DIR)/src/litenyx/LITENYX_execution_authority.h
 	@cp $(REPO_ROOT)/litenyx/LITENYX_topology_tracker.h $(DOGECOIN_DIR)/src/litenyx/LITENYX_topology_tracker.h
 	@cp $(REPO_ROOT)/litenyx/LITENYX_topology_tracker.cpp $(DOGECOIN_DIR)/src/litenyx/LITENYX_topology_tracker.cpp
 	@echo "Applying litenyx patches (mandatory: any failure is fatal)..."

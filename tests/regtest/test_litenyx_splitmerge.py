@@ -680,3 +680,112 @@ def test_phase5_lifecycle_independent_of_topology_commitment(regtest_node):
         life = _life(regtest_node, "expected", "regtest", h)["commitment"]
         assert topo != life, f"lifecycle and topology commitments collide at {h}"
 
+
+# ---------------------------------------------------------------------------
+# Phase 6: Consensus-authoritative EXECUTION AUTHORITY ENFORCEMENT
+# (spec docs/litenyx_execution_authority_spec_v0.1.md §4/§6/§7/§10.11)
+#
+# These drive the REAL compiled Phase-6 engine (LITENYX_execution_authority.h)
+# via the regtest-only testlitenyxexecauthority RPC. It calls the SAME functions
+# the ConnectBlock hook (LitenyxCheckExecutionAuthority) uses:
+#   regime    -> LitenyxExecutionActivationForNetwork(net).RegimeAt(h)
+#   resolve   -> LitenyxResolveExecutionAuthorityForLane  (lane-only, daemon path)
+#   resolveid -> LitenyxResolveExecutionAuthority         (explicit chainId,lane)
+# A route the engine rejects here (UNKNOWN/REVOKED/WrongLane/Malformed/Premature)
+# is rejected on the real consensus path (satisfies §10.11 compiled-and-
+# exercised). Expected L_h is derived from a CANONICAL synthetic chain ALONE.
+# regtest Phase-6 activation: H_exec_derive = 600, H_exec_enforce = 800.
+# ---------------------------------------------------------------------------
+
+def _exec(regtest_node, *args):
+    return regtest_node("testlitenyxexecauthority", *args)
+
+
+def test_phase6_regime_boundaries_exact(regtest_node):
+    """Execution-authority regime is determined strictly by height at
+    H_exec_derive/H_exec_enforce (spec §6, staged INDEPENDENT activation)."""
+    assert _exec(regtest_node, "regime", "regtest", "599")["regime"] == "PreDerivation"
+    assert _exec(regtest_node, "regime", "regtest", "600")["regime"] == "SoftAdvisory"
+    assert _exec(regtest_node, "regime", "regtest", "799")["regime"] == "SoftAdvisory"
+    assert _exec(regtest_node, "regime", "regtest", "800")["regime"] == "HardAuthority"
+    # Mainnet is DISABLED in Phase 6 -> dormant at all heights.
+    assert _exec(regtest_node, "regime", "main", "1000000")["regime"] == "PreDerivation"
+
+
+def test_phase6_authorized_lane_routes(regtest_node):
+    """An active identity asserted on its authoritative lane is AUTHORIZED and
+    may route/bind (spec §4/§5). Genesis binds lane 0->ChainId0, lane 1->ChainId1."""
+    for lane in ("0", "1"):
+        r = _exec(regtest_node, "resolve", "regtest", "800", lane)
+        assert r["state"] == "AUTHORIZED", r
+        assert r["code"] == "ok" and r["authorized"] is True
+        assert r["mayRoute"] is True and r["mayBind"] is True
+
+
+def test_phase6_unbound_lane_is_unknown(regtest_node):
+    """A lane with no active binding (>= N_h) resolves to the nextChainId sentinel
+    => UNKNOWN (F1); it can never silently route (spec §4 A4, adapter §)."""
+    for lane in ("2", "5", "7"):
+        r = _exec(regtest_node, "resolve", "regtest", "800", lane)
+        assert r["state"] == "UNKNOWN" and r["code"] == "unknown", r
+        assert r["authorized"] is False
+
+
+def test_phase6_out_of_epoch_lane_is_malformed(regtest_node):
+    """A lane index >= TOPO_MAX_CHAINS (8) is structurally malformed (F5), decided
+    BEFORE any lifecycle lookup (precedence: Malformed > Premature > projection)."""
+    for lane in ("8", "9", "255"):
+        r = _exec(regtest_node, "resolve", "regtest", "800", lane)
+        assert r["code"] == "malformed" and r["authorized"] is False, r
+
+
+def test_phase6_hardauthority_rejects_and_softadvisory_accepts(regtest_node):
+    """Regime gating on the DAEMON path (lane-only): in HardAuthority an unbound
+    lane fails closed; in PreDerivation any assertion is Premature (F4)."""
+    # HardAuthority (h=800): unbound lane -> unknown, would fail block connection.
+    assert _exec(regtest_node, "resolve", "regtest", "800", "3")["code"] == "unknown"
+    # PreDerivation (h=599): authority dormant -> premature (fail closed).
+    assert _exec(regtest_node, "resolve", "regtest", "599", "0")["code"] == "premature"
+
+
+def test_phase6_wrong_lane_rejected(regtest_node):
+    """F3 WrongLane: an AUTHORIZED identity claimed on a lane it does not own is
+    rejected (mayBind true, mayRoute false). Reachable only with an explicit
+    (chainId, lane) via the SAME pure engine the adapter defers to (spec §7 F3)."""
+    r = _exec(regtest_node, "resolveid", "regtest", "800", "0", "1")
+    assert r["state"] == "AUTHORIZED", r
+    assert r["code"] == "wrong_lane"
+    assert r["authorized"] is False and r["mayRoute"] is False
+    assert r["mayBind"] is True
+    # Same identity on its own lane still routes (control).
+    ok = _exec(regtest_node, "resolveid", "regtest", "800", "0", "0")
+    assert ok["code"] == "ok" and ok["authorized"] is True
+
+
+def test_phase6_nonexistent_and_premature_via_resolveid(regtest_node):
+    """A chainId >= nextChainId is UNKNOWN (F1); before H_exec_derive every
+    assertion is Premature (F4) regardless of identity validity."""
+    n = _exec(regtest_node, "resolveid", "regtest", "800", "0", "0")["nextChainId"]
+    assert _exec(regtest_node, "resolveid", "regtest", "800", str(n), "0")["code"] == "unknown"
+    assert _exec(regtest_node, "resolveid", "regtest", "800", str(n + 3), "0")["code"] == "unknown"
+    # Premature dominates projection: even a valid identity is premature pre-derive.
+    assert _exec(regtest_node, "resolveid", "regtest", "500", "0", "0")["code"] == "premature"
+
+
+def test_phase6_decision_path_independent(regtest_node):
+    """The execution-authority decision is a pure function of canonical L_h:
+    deterministic across repeated queries at every enforced height."""
+    for h in ("600", "700", "800", "900"):
+        a = _exec(regtest_node, "resolve", "regtest", h, "0")
+        b = _exec(regtest_node, "resolve", "regtest", h, "0")
+        assert a == b, f"non-deterministic execution-authority decision at {h}"
+
+
+def test_phase6_authority_ordered_after_lifecycle(regtest_node):
+    """Layering sanity (spec §6.2): Phase-6 activates STRICTLY LATER than Phase-5
+    (exec derive 600 > lifecycle derive 200; exec enforce 800 > lifecycle enforce
+    400), so a block reaches the execution check only after lifecycle enforcement."""
+    assert _life(regtest_node, "regime", "regtest", "500")["regime"] == "HardAuthority"
+    assert _exec(regtest_node, "regime", "regtest", "500")["regime"] == "PreDerivation"
+    assert _exec(regtest_node, "regime", "regtest", "800")["regime"] == "HardAuthority"
+

@@ -2,7 +2,7 @@ diff --git a/src/rpc/mining.cpp b/src/rpc/mining.cpp
 index 80530d2..978ebac 100644
 --- a/src/rpc/mining.cpp
 +++ b/src/rpc/mining.cpp
-@@ -20,6 +20,11 @@
+@@ -20,6 +20,12 @@
  #include "net.h"
  #include "pow.h"
  #include "rpc/server.h"
@@ -11,10 +11,11 @@ index 80530d2..978ebac 100644
 +#include "litenyx/LITENYX_topology_tracker.h"
 +#include "litenyx/LITENYX_topology_authority.h"
 +#include "litenyx/LITENYX_chainid_lifecycle.h"
++#include "litenyx/LITENYX_execution_authority.h"
  #include "txmempool.h"
  #include "util.h"
  #include "utilstrencodings.h"
-@@ -32,6 +36,13 @@
+@@ -32,6 +36,14 @@
  
  #include <univalue.h>
  
@@ -24,11 +25,12 @@ index 80530d2..978ebac 100644
 +UniValue testlitenyxtopology(const JSONRPCRequest& request);
 +UniValue testlitenyxtopoauthority(const JSONRPCRequest& request);
 +UniValue testlitenyxlifecycle(const JSONRPCRequest& request);
++UniValue testlitenyxexecauthority(const JSONRPCRequest& request);
 +
  using namespace std;
  
  /**
-@@ -975,8 +985,370 @@ static const CRPCCommand commands[] =
+@@ -975,8 +985,496 @@ static const CRPCCommand commands[] =
      { "util",               "estimatepriority",       &estimatepriority,       true,  {"nblocks"} },
      { "util",               "estimatesmartfee",       &estimatesmartfee,       true,  {"nblocks"} },
      { "util",               "estimatesmartpriority",  &estimatesmartpriority,  true,  {"nblocks"} },
@@ -37,6 +39,7 @@ index 80530d2..978ebac 100644
 +    { "litenyx",            "testlitenyxtopology",     &testlitenyxtopology,     true,  {"mode","chainid","mc","height"} },
 +    { "litenyx",            "testlitenyxtopoauthority",&testlitenyxtopoauthority,true,  {"mode","net","height","arg4","arg5"} },
 +    { "litenyx",            "testlitenyxlifecycle",    &testlitenyxlifecycle,    true,  {"mode","net","height","arg4","arg5"} },
++    { "litenyx",            "testlitenyxexecauthority",&testlitenyxexecauthority,true,  {"mode","net","height","arg4","arg5"} },
  };
  
 +/** Litenyx Phase 2 regtest-only RPC: exercise the REAL global shared spent-set
@@ -393,6 +396,131 @@ index 80530d2..978ebac 100644
 +        }
 +    } catch (const std::exception& e) {
 +        throw JSONRPCError(RPC_MISC_ERROR, std::string("LITENYX-lifecycle: ") + e.what());
++    }
++}
++
++/** Litenyx Phase 6 regtest-only RPC: exercise the REAL compiled execution-
++ *  authority decision that ConnectBlock enforces via LitenyxCheckExecutionAuthority.
++ *  It drives the SAME pure engine + adapter the hook consumes: derive expected
++ *  L_h from a CANONICAL synthetic chain, then resolve an asserted TopologyLaneId
++ *  to its authoritative PersistentChainId and return the frozen decision. A lane
++ *  that resolves to REVOKED/UNKNOWN/wrong is rejected on the real consensus path.
++ *  It creates NO process-local state and is NOT a consensus dependency.
++ *
++ *  Deterministic synthetic canonical chain: `height` blocks, all on lane 0 at
++ *  full MAX_BLOCK_WEIGHT (saturated demand -> SPLITs), matching the C++ proofs.
++ *
++ *  Modes:
++ *    regime  <net> <height>          -> {regime}
++ *    resolve <net> <height> <lane>   -> {code,state,authorized,mayRoute,mayBind,laneId,chainId}
++ */
++UniValue testlitenyxexecauthority(const JSONRPCRequest& request)
++{
++    auto getInt = [](const UniValue& v) -> long {
++        if (v.isNum()) return (long)v.get_int64();
++        return atol(v.get_str().c_str());
++    };
++    auto buildChain = [](uint32_t h) {
++        std::vector<LitenyxCommittedBlock> v(h);
++        for (auto& b : v) { b.chainId = 0; b.blockWeight = LITENYX_MAX_BLOCK_WEIGHT; }
++        return v;
++    };
++    auto regimeName = [](LitenyxTopoRegime r) -> std::string {
++        switch (r) {
++            case LitenyxTopoRegime::PreDerivation: return "PreDerivation";
++            case LitenyxTopoRegime::SoftAdvisory:  return "SoftAdvisory";
++            case LitenyxTopoRegime::HardAuthority: return "HardAuthority";
++        }
++        return "unknown";
++    };
++    auto codeName = [](LitenyxExecutionAuthorityCode c) -> std::string {
++        switch (c) {
++            case LitenyxExecutionAuthorityCode::Ok:        return "ok";
++            case LitenyxExecutionAuthorityCode::Unknown:   return "unknown";
++            case LitenyxExecutionAuthorityCode::Revoked:   return "revoked";
++            case LitenyxExecutionAuthorityCode::WrongLane: return "wrong_lane";
++            case LitenyxExecutionAuthorityCode::Premature: return "premature";
++            case LitenyxExecutionAuthorityCode::Malformed: return "malformed";
++        }
++        return "unknown";
++    };
++    auto stateName = [](LitenyxExecutionAuthorityState s) -> std::string {
++        switch (s) {
++            case LitenyxExecutionAuthorityState::AUTHORIZED: return "AUTHORIZED";
++            case LitenyxExecutionAuthorityState::REVOKED:    return "REVOKED";
++            case LitenyxExecutionAuthorityState::UNKNOWN:    return "UNKNOWN";
++        }
++        return "UNKNOWN";
++    };
++    try {
++        if (request.fHelp || request.params.size() < 3)
++            throw std::runtime_error(
++                "testlitenyxexecauthority \"mode\" \"net\" height [lane]\n"
++                "\nExercise the Litenyx Phase-6 execution-authority decision.\n"
++                "mode:   \"regime\" | \"resolve\"\n"
++                "net:    \"main\" | \"test\" | \"regtest\"\n"
++                "height: block height to evaluate at\n"
++                "resolve: arg4 = asserted TopologyLaneId\n");
++
++        std::string mode = request.params[0].get_str();
++        std::string net = request.params[1].get_str();
++        uint32_t height = (uint32_t)getInt(request.params[2]);
++        LitenyxChainIdActivation act = LitenyxExecutionActivationForNetwork(net);
++
++        if (mode == "regime") {
++            UniValue out(UniValue::VOBJ);
++            out.pushKV("regime", regimeName(act.RegimeAt(height)));
++            return out;
++        } else if (mode == "resolve") {
++            if (request.params.size() < 4)
++                throw JSONRPCError(RPC_INVALID_PARAMETER, "resolve requires a lane");
++            uint32_t lane = (uint32_t)getInt(request.params[3]);
++            LitenyxChainIdLifecycleState expected;
++            if (!LitenyxCalculateExpectedLifecycleFromChain(buildChain(height), height, expected))
++                throw JSONRPCError(RPC_MISC_ERROR, "lifecycle derivation failed");
++            LitenyxExecutionAuthorityResult res =
++                LitenyxResolveExecutionAuthorityForLane(expected, lane, height, act.RegimeAt(height));
++            UniValue out(UniValue::VOBJ);
++            out.pushKV("regime", regimeName(act.RegimeAt(height)));
++            out.pushKV("code", codeName(res.code));
++            out.pushKV("state", stateName(res.state));
++            out.pushKV("authorized", res.authorized);
++            out.pushKV("mayRoute", res.mayRoute);
++            out.pushKV("mayBind", res.mayBind);
++            out.pushKV("laneId", (int)res.laneId);
++            out.pushKV("chainId", (int64_t)res.chainId);
++            return out;
++        } else if (mode == "resolveid") {
++            // Drive the pure engine DIRECTLY with an explicit (chainId, lane) pair
++            // — the SAME LitenyxResolveExecutionAuthority the lane adapter defers to.
++            // This reaches the F3 WrongLane / projection outcomes that a
++            // lane-only assertion cannot (an active identity claimed on the wrong
++            // lane), exercising the compiled precedence on the real RPC path.
++            if (request.params.size() < 5)
++                throw JSONRPCError(RPC_INVALID_PARAMETER, "resolveid requires chainId and lane");
++            uint32_t cid  = (uint32_t)getInt(request.params[3]);
++            uint32_t lane = (uint32_t)getInt(request.params[4]);
++            LitenyxChainIdLifecycleState expected;
++            if (!LitenyxCalculateExpectedLifecycleFromChain(buildChain(height), height, expected))
++                throw JSONRPCError(RPC_MISC_ERROR, "lifecycle derivation failed");
++            LitenyxExecutionAuthorityResult res =
++                LitenyxResolveExecutionAuthority(expected, cid, lane, height, act.RegimeAt(height));
++            UniValue out(UniValue::VOBJ);
++            out.pushKV("regime", regimeName(act.RegimeAt(height)));
++            out.pushKV("code", codeName(res.code));
++            out.pushKV("state", stateName(res.state));
++            out.pushKV("authorized", res.authorized);
++            out.pushKV("mayRoute", res.mayRoute);
++            out.pushKV("mayBind", res.mayBind);
++            out.pushKV("laneId", (int)res.laneId);
++            out.pushKV("chainId", (int64_t)res.chainId);
++            out.pushKV("nextChainId", (int64_t)expected.nextChainId);
++            return out;
++        } else {
++            throw JSONRPCError(RPC_INVALID_PARAMETER, "unknown mode (regime|resolve|resolveid)");
++        }
++    } catch (const std::exception& e) {
++        throw JSONRPCError(RPC_MISC_ERROR, std::string("LITENYX-execauthority: ") + e.what());
 +    }
 +}
 +
