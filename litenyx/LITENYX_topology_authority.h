@@ -67,8 +67,15 @@ enum class LitenyxTopoRegime {
 // Per-network activation heights (mirrors Consensus::Params in the daemon; kept
 // here as a pure struct so the engine + proofs share one definition).
 struct LitenyxTopoActivation {
-    uint32_t hDerive   = LITENYX_TOPO_ACTIVATION_DISABLED;
-    uint32_t hTopology = LITENYX_TOPO_ACTIVATION_DISABLED;
+    uint32_t hDerive;
+    uint32_t hTopology;
+
+    // Explicit ctors so brace-init compiles under the daemon's C++ standard
+    // (default member initializers would make this a non-aggregate pre-C++14).
+    LitenyxTopoActivation()
+        : hDerive(LITENYX_TOPO_ACTIVATION_DISABLED),
+          hTopology(LITENYX_TOPO_ACTIVATION_DISABLED) {}
+    LitenyxTopoActivation(uint32_t d, uint32_t t) : hDerive(d), hTopology(t) {}
 
     bool IsDisabled() const { return hDerive == LITENYX_TOPO_ACTIVATION_DISABLED; }
 

@@ -62,7 +62,11 @@ inline std::ostream& operator<<(std::ostream& os, LitenyxTopoDecision d) {
 // integer 0..100 "demand pressure" M_c by the caller (the daemon computes this
 // from real block data; the proof feeds it directly).
 struct LitenyxChainObservation {
-    int32_t M_c = 0; // normalized demand pressure for chain c, 0..100
+    int32_t M_c; // normalized demand pressure for chain c, 0..100
+    // Explicit ctors so brace-init works under the daemon's C++ standard (a
+    // default member initializer would make this a non-aggregate pre-C++14).
+    LitenyxChainObservation() : M_c(0) {}
+    explicit LitenyxChainObservation(int32_t mc) : M_c(mc) {}
 };
 
 // A per-chain observation vector (index == chainId). Defined here so both the
