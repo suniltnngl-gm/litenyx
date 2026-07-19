@@ -3,6 +3,8 @@ external/
 deploy/external/
 build/
 out/
+tmp/
+log/
 
 # Binaries
 *.exe

@@ -18,7 +18,17 @@
 struct uint256 {
     unsigned char data[32] = {};
     bool operator==(const uint256& o) const { return std::memcmp(data, o.data, 32) == 0; }
+    bool operator!=(const uint256& o) const { return !(*this == o); }
     bool operator<(const uint256& o) const { return std::memcmp(data, o.data, 32) < 0; }
+    // Subset of the real Dogecoin uint256 surface used by Litenyx consensus code,
+    // so identical code compiles standalone AND in the daemon.
+    bool IsNull() const {
+        for (int i = 0; i < 32; ++i) if (data[i]) return false;
+        return true;
+    }
+    void SetNull() { std::memset(data, 0, 32); }
+    unsigned char* begin() { return data; }
+    const unsigned char* begin() const { return data; }
 };
 inline uint256 uint256S(const char* hex) {
     uint256 r{};
@@ -38,9 +48,27 @@ struct LitenyxAuxHeader {
     uint256  auxAnchor;      // commits to the parent tip on the SAME chain
     uint64_t splitVector;    // reserved for Phase 3 (split/merge vector)
     uint32_t reserved;       // must be zero
+    // Phase 4 (V2 layout ONLY): commitment carried by the block. It is the
+    // frozen TopologyStateHash of the network's INDEPENDENTLY derived expected
+    // T_h (§3). The AuxHeader CARRIES the commitment; it NEVER defines
+    // authoritative topology. PRESENCE is structural (magic == V2), NOT inferred
+    // from a zero value. Only serialized/meaningful when IsV2(). See §5.7.
+    uint256  topologyCommitment;
 
-    void SetMagic() { magic = LITENYX_AUX_MAGIC; }
-    bool HasMagic() const { return magic == LITENYX_AUX_MAGIC; }
+    // --- Wire-format version predicates (spec §5.7) --------------------------
+    bool IsV1() const { return magic == LITENYX_AUX_MAGIC_V1; }
+    bool IsV2() const { return magic == LITENYX_AUX_MAGIC_V2; }
+    // Recognized Litenyx-aware format (V1 or V2). Replaces the old single-magic
+    // notion; consensus code that gated on "is this a Litenyx header" uses this.
+    bool HasKnownMagic() const { return IsV1() || IsV2(); }
+
+    void SetMagicV1() { magic = LITENYX_AUX_MAGIC_V1; }
+    void SetMagicV2() { magic = LITENYX_AUX_MAGIC_V2; }
+    // Deprecated spelling retained for existing Phase 2/3 call sites: sets V1.
+    void SetMagic() { magic = LITENYX_AUX_MAGIC_V1; }
+    // Deprecated spelling retained for existing Phase 2/3 call sites: recognizes
+    // ANY known Litenyx format (V1 or V2) so V2 headers are not misclassified.
+    bool HasMagic() const { return HasKnownMagic(); }
 
     void SetNull() {
         magic = 0;
@@ -49,7 +77,13 @@ struct LitenyxAuxHeader {
         auxAnchor = uint256();
         splitVector = 0;
         reserved = 0;
+        topologyCommitment = uint256();
     }
+
+    // Phase 4 accessor: a topology commitment is STRUCTURALLY present iff the
+    // header is V2. A V2 header with an all-zero commitment is PRESENT (it will
+    // simply fail comparison unless zero is the expected hash).
+    bool HasTopologyCommitment() const { return IsV2(); }
 
 #ifndef KERRNYX_STANDALONE_TEST
     ADD_SERIALIZE_METHODS;
@@ -62,6 +96,12 @@ struct LitenyxAuxHeader {
         READWRITE(auxAnchor);
         READWRITE(splitVector);
         READWRITE(reserved);
+        // V2-ONLY trailing field. magic is read first, so the parser knows the
+        // exact byte-width of nyx_aux before decoding subsequent block fields.
+        // V0/V1 streams carry NO topology bytes (byte-identical to Phase 2/3).
+        if (magic == LITENYX_AUX_MAGIC_V2) {
+            READWRITE(topologyCommitment);
+        }
     }
 #endif
 

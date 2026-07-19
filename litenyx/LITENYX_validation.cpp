@@ -1,8 +1,15 @@
 #include "LITENYX_validation.h"
 
 #include "LITENYX_sharedstate.h"
+#include "LITENYX_topology_authority.h"
 #include "primitives/transaction.h"
-#include "validation.h"
+#include "primitives/block.h"
+#include "consensus/validation.h"
+#include "chain.h"
+#include "validation.h" // ConnectBlock context, ReadBlockFromDisk, GetBlockWeight
+#include "util.h"
+
+#include <vector>
 
 bool LitenyxCheckAuxHeader(const CBlock& block, const CBlockIndex* pindexPrev,
                            CValidationState& state)
@@ -75,5 +82,104 @@ void LitenyxDisconnectSharedState(const CBlock& block)
         for (const CTxIn& txin : tx->vin) {
             LitenyxRevertSharedSpend(txin.prevout.hash, txin.prevout.n);
         }
+    }
+}
+
+// ---- Phase 4B(4): topology-commitment enforcement (spec §5.7/§9) -----------
+
+namespace {
+
+// Build the canonical (chainId, GetBlockWeight) sequence for heights 1..h, where
+// h == pindexPrev->nHeight + 1. Index i corresponds to height i+1. The tip block
+// is `block` (already in memory); ancestors are read from disk via CANONICAL
+// chain data ONLY. Returns false if any ancestor body cannot be read.
+bool LitenyxBuildCanonicalBlocks(
+    const CBlock& block,
+    const CBlockIndex* pindexPrev,
+    const Consensus::Params& consensus,
+    std::vector<LitenyxCommittedBlock>& out)
+{
+    const int nHeight = pindexPrev ? pindexPrev->nHeight + 1 : 0;
+    if (nHeight <= 0) return true; // nothing to reconstruct at/under genesis
+
+    out.assign((size_t)nHeight, LitenyxCommittedBlock{});
+
+    // Tip (this block) at index nHeight-1.
+    out[nHeight - 1].chainId = block.nyx_aux.chainId;
+    out[nHeight - 1].blockWeight = (int64_t)::GetBlockWeight(block);
+
+    // Ancestors: walk pindexPrev down to genesis, reading each body from disk.
+    for (const CBlockIndex* pi = pindexPrev; pi && pi->nHeight >= 1; pi = pi->pprev) {
+        CBlock anc;
+        if (!ReadBlockFromDisk(anc, pi, consensus)) {
+            return false; // pruned/missing body: cannot reconstruct authoritatively
+        }
+        const int idx = pi->nHeight - 1; // height h -> index h-1
+        out[idx].chainId = anc.nyx_aux.chainId;
+        out[idx].blockWeight = (int64_t)::GetBlockWeight(anc);
+    }
+    return true;
+}
+
+} // namespace
+
+bool LitenyxCheckTopologyCommitment(const CBlock& block,
+                                    const CBlockIndex* pindexPrev,
+                                    const std::string& netId,
+                                    const Consensus::Params& consensus,
+                                    CValidationState& state)
+{
+    const uint32_t nHeight =
+        (uint32_t)(pindexPrev ? pindexPrev->nHeight + 1 : 0);
+
+    // 1. Regime from the frozen per-network activation.
+    const LitenyxTopoActivation act = LitenyxTopoActivationForNetwork(netId);
+    const LitenyxTopoRegime regime = act.RegimeAt(nHeight);
+
+    const bool hasCommit = block.nyx_aux.HasTopologyCommitment(); // structural (V2)
+
+    // Fast path: PreDerivation (incl. disabled networks). No derivation needed;
+    // a present (V2) commitment is premature and rejected, else legacy behavior.
+    if (regime == LitenyxTopoRegime::PreDerivation) {
+        const LitenyxCommitVerdict v = LitenyxVerifyTopologyCommitment(
+            regime, hasCommit, block.nyx_aux.topologyCommitment,
+            LitenyxTopologyState::Genesis());
+        if (v == LitenyxCommitVerdict::Invalid) {
+            return state.Invalid(false, 0,
+                                 "litenyx-topo-commit-premature");
+        }
+        return true;
+    }
+
+    // 2. Derive expected authoritative topology from CANONICAL CHAIN ALONE.
+    std::vector<LitenyxCommittedBlock> chainBlocks;
+    if (!LitenyxBuildCanonicalBlocks(block, pindexPrev, consensus, chainBlocks)) {
+        // Reconstruction inputs unavailable (e.g. pruned body). In an active
+        // regime we cannot prove the commitment; fail closed rather than guess.
+        return state.Invalid(false, 0,
+                             "litenyx-topo-reconstruct-unavailable");
+    }
+    const LitenyxTopologyState expected = LitenyxCalculateExpectedTopologyFromChain(
+        LitenyxTopologyState::Genesis(), chainBlocks, nHeight);
+
+    // 3. Pure verification.
+    const LitenyxCommitVerdict verdict = LitenyxVerifyTopologyCommitment(
+        regime, hasCommit, block.nyx_aux.topologyCommitment, expected);
+
+    // 4. Map verdict to consensus result.
+    switch (verdict) {
+        case LitenyxCommitVerdict::Valid:
+            return true;
+        case LitenyxCommitVerdict::AdvisoryMismatch:
+            // Soft regime: reportable, NOT consensus-invalid. Failure-contained.
+            try {
+                LogPrintf("Litenyx: topology commitment advisory mismatch at "
+                          "height %u (soft regime)\n", nHeight);
+            } catch (...) {}
+            return true;
+        case LitenyxCommitVerdict::Invalid:
+        default:
+            return state.Invalid(false, 0,
+                                 "litenyx-topo-commit-invalid");
     }
 }
