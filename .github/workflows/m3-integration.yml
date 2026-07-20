@@ -20,6 +20,12 @@ on:
     branches: [phase7-draining-authority, main]
   workflow_dispatch:
 
+# Ensure only one M3 gate runs per branch: a new push/PR update cancels any
+# in-flight run, preventing parallel/duplicate gate executions.
+concurrency:
+  group: m3-integration-gate-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   m3-integration-gate:
     # The ubuntu-20.04 HOSTED-RUNNER LABEL is no longer reliably schedulable on
