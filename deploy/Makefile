@@ -14,7 +14,8 @@ BOOST_TEST ?= -lboost_unit_test_framework
 # against Dogecoin v1.14.9. Pin the base to the EXACT commit so the daemon built
 # for G1-G3 integration is structurally identical to the designed source. A moving
 # `master` would invalidate the INT-Q4 boundary analysis, so this is a hard pin.
-DOGECOIN_PIN ?= e0a1c157791544e818c901bd9341896965afbf9d  # Dogecoin Core v1.14.9
+# Dogecoin Core v1.14.9 (INT-Q5 hard pin; see comment above for rationale)
+DOGECOIN_PIN ?= e0a1c157791544e818c901bd9341896965afbf9d
 
 KERRNYX_INCLUDES = -I$(REPO_ROOT) -I$(REPO_ROOT)/cpp_reference -I$(DOGECOIN_DIR)/src
 KERRNYX_TEST_SRC = $(REPO_ROOT)/cpp_reference/test/test_litenyx.cpp
