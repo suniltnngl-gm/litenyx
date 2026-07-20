@@ -37,6 +37,11 @@ jobs:
     env:
       DEBIAN_FRONTEND: noninteractive
       TZ: Etc/UTC
+      # Explicit C++20-capable compiler for the M3 KAT (-std=c++20). Ubuntu
+      # 20.04's default g++-9 only accepts -std=c++2a. g++-10 preserves the
+      # intended C++20 language-standard contract; the daemon also builds with
+      # it deterministically (pinned e0a1c157 source). Build-infra only.
+      CXX: g++-10
     # Incremental headroom over the initial 180m: a full --enable-debug Dogecoin
     # build is slow. A timeout is treated as an infrastructure result, not an M3
     # failure; raise further only if a timeout is observed with evidence.
@@ -57,7 +62,8 @@ jobs:
             bsdmainutils python3 python3-pip libssl-dev libevent-dev \
             libboost-all-dev \
             libboost-test-dev libboost-thread-dev libboost-chrono-dev \
-            libminiupnpc-dev libzmq3-dev libsqlite3-dev libdb++-dev libfmt-dev
+            libminiupnpc-dev libzmq3-dev libsqlite3-dev libdb++-dev libfmt-dev \
+            g++-10
           python3 -m pip install --upgrade pip pytest
 
       - name: Clone Dogecoin base (pin e0a1c157)
@@ -67,7 +73,12 @@ jobs:
       - name: Run fail-closed M3 integration gate (debug daemon + G1-G3)
         working-directory: deploy
         run: |
-          make m3-integration 2>&1 | tee /tmp/m3_gate_console.log
+          # Fail-closed: capture make's exit code and propagate it. We avoid
+          # 'set -o pipefail' (unsupported by dash, the container's /bin/sh)
+          # by writing to a log, capturing rc, printing, then exiting with rc.
+          make m3-integration > /tmp/m3_gate_console.log 2>&1; rc=$?
+          cat /tmp/m3_gate_console.log
+          exit $rc
 
       - name: Upload M3 integration report
         if: always()

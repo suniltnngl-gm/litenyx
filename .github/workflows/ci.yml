@@ -22,6 +22,9 @@ jobs:
     env:
       DEBIAN_FRONTEND: noninteractive
       TZ: Etc/UTC
+      # C++20-capable compiler for the cpp-test KATs (-std=c++20); g++-9 only
+      # accepts -std=c++2a. Build-infra only.
+      CXX: g++-10
     timeout-minutes: 120
     steps:
       - name: Checkout
@@ -39,7 +42,8 @@ jobs:
             bsdmainutils python3 python3-pip libssl-dev libevent-dev \
             libboost-all-dev \
             libboost-test-dev libboost-thread-dev libboost-chrono-dev \
-            libminiupnpc-dev libzmq3-dev libsqlite3-dev libdb++-dev libfmt-dev
+            libminiupnpc-dev libzmq3-dev libsqlite3-dev libdb++-dev libfmt-dev \
+            g++-10
           python3 -m pip install --upgrade pip pytest
 
       - name: Clone Dogecoin base
@@ -53,7 +57,9 @@ jobs:
       - name: Build dogecoind / dogecoin-cli
         working-directory: deploy
         run: |
-          make production-build 2>&1 | tee build_diag.log
+          make production-build > build_diag.log 2>&1; rc=$?
+          cat build_diag.log
+          exit $rc
 
       - name: Run C++ unit tests (shared-state core)
         working-directory: deploy
