@@ -8,6 +8,13 @@ CURDIR ?= $(shell pwd)
 REPO_ROOT ?= $(CURDIR)/..
 DOGECOIN_DIR ?= $(CURDIR)/external/dogecoin
 CXX ?= g++
+# KAT compiler: the M3 delta KATs compile Litenyx sharedstate.cpp together with
+# real Dogecoin support TUs (uint256.cpp, utilstrencodings.cpp), which pull in
+# Dogecoin Core v1.14.9's src/compat/endian.h. That header double-defines the
+# bswap helpers under g++ on glibc 2.31, but clang compiles it cleanly (the KAT
+# was originally verified with clang++). Keep the daemon on $(CXX); use clang++
+# only for the standalone KAT link. Build-infra choice; semantics unchanged.
+KERRNYX_KAT_CXX ?= clang++
 BOOST_TEST ?= -lboost_unit_test_framework
 
 # INT-Q5 (pin): the M3 attach points (ConnectTip failure boundary) were VERIFIED
@@ -161,7 +168,7 @@ m3-integration: production-build-debug
 	@echo "[3/5] Debug daemon present:"
 	@test -x $(DOGECOIN_DIR)/src/dogecoind || { echo "FATAL: dogecoind missing"; exit 1; }
 	@echo "[4/5] M3 real-class delta KATs (6/6 required):"
-	$(CXX) -std=c++20 -O0 -DKERRNYX_STANDALONE_TEST \
+	$(KERRNYX_KAT_CXX) -std=c++20 -O0 -DKERRNYX_STANDALONE_TEST \
 		$(KERRNYX_INCLUDES) $(KERRNYX_DELTA_SRC) $(KERRNYX_DOGE_SUPPORT) -o $(KERRNYX_DELTA_BIN) \
 		-lpthread $(BOOST_TEST) && $(KERRNYX_DELTA_BIN)
 	@echo "[5/5] G1-G3 regtest (SKIP or FAIL => gate fails):"
