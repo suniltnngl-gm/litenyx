@@ -33,6 +33,27 @@ KERRNYX_DRAIN_SRC = $(REPO_ROOT)/cpp_reference/test/test_litenyx_draining_author
 KERRNYX_DRAIN_BIN = $(REPO_ROOT)/cpp_reference/test/test_litenyx_draining_authority
 KERRNYX_DELTA_SRC = $(REPO_ROOT)/cpp_reference/test/test_litenyx_shared_delta.cpp
 KERRNYX_DELTA_BIN = $(REPO_ROOT)/cpp_reference/test/test_litenyx_shared_delta
+KERRNYX_S1_SRC = $(REPO_ROOT)/cpp_reference/s1/test_litenyx_s1_replay.cpp
+KERRNYX_S1_BIN = $(REPO_ROOT)/cpp_reference/s1/test_litenyx_s1_replay
+KERRNYX_S1_MON_SRC = $(REPO_ROOT)/cpp_reference/s1/test_litenyx_s1_mon_ontology.cpp
+KERRNYX_S1_MON_BIN = $(REPO_ROOT)/cpp_reference/s1/test_litenyx_s1_mon_ontology
+# S1 links the REAL frozen production tracker (LITENYX_topology_tracker.cpp) so the
+# deferred-transition state machine is exercised exactly as in validation.cpp, not
+# re-implemented. It does NOT depend on the dogecoin tree (header-only + this .cpp).
+KERRNYX_S1_TRACKER_SRC = $(REPO_ROOT)/litenyx/LITENYX_topology_tracker.cpp
+# H1-SHADOW-ENG counterfactual experiment (H1 ONLY; read-only, isolated from consensus).
+KERRNYX_H1_POWTGT_SRC = $(REPO_ROOT)/cpp_reference/s1/test_litenyx_h1_pow_target.cpp
+KERRNYX_H1_POWTGT_BIN = $(REPO_ROOT)/cpp_reference/s1/test_litenyx_h1_pow_target
+KERRNYX_H1_SIM_SRC = $(REPO_ROOT)/cpp_reference/s1/test_litenyx_h1_shadow_sim.cpp
+KERRNYX_H1_SIM_BIN = $(REPO_ROOT)/cpp_reference/s1/test_litenyx_h1_shadow_sim
+KERRNYX_H1_ISO_SRC = $(REPO_ROOT)/cpp_reference/s1/test_litenyx_h1_iso.cpp
+KERRNYX_H1_ISO_BIN = $(REPO_ROOT)/cpp_reference/s1/test_litenyx_h1_iso
+KERRNYX_H1_M3_SRC = $(REPO_ROOT)/cpp_reference/s1/test_litenyx_h1_m3.cpp
+KERRNYX_H1_M3_BIN = $(REPO_ROOT)/cpp_reference/s1/test_litenyx_h1_m3
+KERRNYX_H1_M4_SRC = $(REPO_ROOT)/cpp_reference/s1/test_litenyx_h1_m4.cpp
+KERRNYX_H1_M4_BIN = $(REPO_ROOT)/cpp_reference/s1/test_litenyx_h1_m4
+# Use clang++: g++ returns ld exit 5 (corrupted binary) on large TUs on this toolchain.
+KERRNYX_H1_CXX ?= clang++
 
 # INT-OPEN-1 / M3 real-class KAT links the REAL LITENYX_sharedstate.cpp (which
 # depends on dogecoin uint256 / base_blob::SetHex) plus the minimum real dogecoin
@@ -205,6 +226,48 @@ cpp-test:
 		-lpthread $(BOOST_TEST) && \
 		echo "Running Litenyx shared-delta unit test (INT-OPEN-1 / M3)..." && \
 		$(KERRNYX_DELTA_BIN)
+	@echo "Compiling Litenyx S1 Consensus Replay harness (CONSENSUS_REPLAY)..."
+	$(CXX) -std=c++20 -O0 -DKERRNYX_STANDALONE_TEST \
+		$(KERRNYX_INCLUDES) $(KERRNYX_S1_SRC) $(KERRNYX_S1_TRACKER_SRC) -o $(KERRNYX_S1_BIN) \
+		-lpthread $(BOOST_TEST) && \
+		echo "Running Litenyx S1 Consensus Replay harness..." && \
+		$(KERRNYX_S1_BIN)
+	@echo "Compiling Litenyx S1 MON-ONTOLOGY-1 isolation + H1 counterfactual tests..."
+	$(CXX) -std=c++20 -O0 -DKERRNYX_STANDALONE_TEST \
+		$(KERRNYX_INCLUDES) $(KERRNYX_S1_MON_SRC) $(KERRNYX_S1_TRACKER_SRC) -o $(KERRNYX_S1_MON_BIN) \
+		-lpthread $(BOOST_TEST) && \
+		echo "Running Litenyx S1 MON-ONTOLOGY-1 / H1 tests..." && \
+		$(KERRNYX_S1_MON_BIN)
+	@echo "Compiling Litenyx H1-SHADOW-ENG target-profile unit tests..."
+	$(KERRNYX_H1_CXX) -std=c++20 -O0 -DKERRNYX_STANDALONE_TEST \
+		$(KERRNYX_INCLUDES) $(KERRNYX_H1_POWTGT_SRC) -o $(KERRNYX_H1_POWTGT_BIN) \
+		-lpthread && \
+		echo "Running Litenyx H1 target-profile tests..." && \
+		$(KERRNYX_H1_POWTGT_BIN)
+	@echo "Compiling Litenyx H1-SHADOW-ENG counterfactual simulator (M0/M1/M2)..."
+	$(KERRNYX_H1_CXX) -std=c++20 -O0 -DKERRNYX_STANDALONE_TEST \
+		$(KERRNYX_INCLUDES) $(KERRNYX_H1_SIM_SRC) -o $(KERRNYX_H1_SIM_BIN) \
+		-lpthread && \
+		echo "Running Litenyx H1-SHADOW-ENG simulator..." && \
+		$(KERRNYX_H1_SIM_BIN)
+	@echo "Compiling Litenyx H1-SHADOW-ENG ISO-1..ISO-10 isolation gate (HARD, pre-M3)..."
+	$(KERRNYX_H1_CXX) -std=c++20 -O0 -DKERRNYX_STANDALONE_TEST \
+		$(KERRNYX_INCLUDES) $(KERRNYX_H1_ISO_SRC) -o $(KERRNYX_H1_ISO_BIN) \
+		-lpthread && \
+		echo "Running Litenyx H1 ISO isolation gate (ALL TEN MUST PASS)..." && \
+		$(KERRNYX_H1_ISO_BIN)
+	@echo "Compiling Litenyx H1-SHADOW-ENG M3 conditioned miner-response (paired CRN)..."
+	$(KERRNYX_H1_CXX) -std=c++20 -O0 -DKERRNYX_STANDALONE_TEST \
+		$(KERRNYX_INCLUDES) $(KERRNYX_H1_M3_SRC) -o $(KERRNYX_H1_M3_BIN) \
+		-lpthread && \
+		echo "Running Litenyx H1 M3 miner-response (report-only; BASE vs H1)..." && \
+		$(KERRNYX_H1_M3_BIN)
+	@echo "Compiling Litenyx H1-SHADOW-ENG M4 adversarial/pathological scarcity (stability boundary)..."
+	$(KERRNYX_H1_CXX) -std=c++20 -O0 -DKERRNYX_STANDALONE_TEST \
+		$(KERRNYX_INCLUDES) $(KERRNYX_H1_M4_SRC) -o $(KERRNYX_H1_M4_BIN) \
+		-lpthread && \
+		echo "Running Litenyx H1 M4 adversarial scarcity (empirical stability boundary)..." && \
+		$(KERRNYX_H1_M4_BIN) --log_level=message
 
 cpp-compile-check:
 	@echo "Litenyx consensus is header-only integer math; no float check required."

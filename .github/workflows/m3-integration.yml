@@ -1,0 +1,61 @@
+name: Litenyx INT-OPEN-1 / M3 Integration Gate
+
+# Fail-closed INT-OPEN-1 gate. Reproduces the repository's `make m3-integration`
+# contract in a clean Linux CI environment that can build the pinned debug
+# dogecoind (the local Windows/MSYS2 host cannot: no make/autotools/BDB).
+#
+# Contract (deploy/Makefile `m3-integration`):
+#   pin e0a1c157 (Dogecoin v1.14.9) -> inject-hooks (5 patches) ->
+#   DEBUG build (assert NO -DNDEBUG) -> M3 delta KATs 6/6 ->
+#   G1-G3 regtest (SKIP or FAIL => gate fails) -> verdict.
+#
+# This workflow only adds BUILD INFRASTRUCTURE. It changes no protocol design,
+# no frozen consensus semantics, and no production code. The gate logic lives in
+# deploy/Makefile and tests/regtest/test_litenyx_m3_integration.py.
+
+on:
+  push:
+    branches: [phase7-draining-authority, main]
+  pull_request:
+    branches: [phase7-draining-authority, main]
+  workflow_dispatch:
+
+jobs:
+  m3-integration-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Install build deps (Dogecoin + boost + pytest)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential libtool autotools-dev automake pkg-config \
+            bsdmainutils python3 python3-pip libssl-dev libevent-dev \
+            libboost-all-dev \
+            libboost-test-dev libboost-thread-dev libboost-chrono-dev \
+            libminiupnpc-dev libzmq3-dev libsqlite3-dev libdb++-dev libfmt-dev
+          python3 -m pip install --upgrade pip pytest
+
+      - name: Clone Dogecoin base (pin e0a1c157)
+        working-directory: deploy
+        run: make clone-dogecoin
+
+      - name: Run fail-closed M3 integration gate (debug daemon + G1-G3)
+        working-directory: deploy
+        run: |
+          set -o pipefail
+          make m3-integration 2>&1 | tee /tmp/m3_gate_console.log
+
+      - name: Upload M3 integration report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Litenyx-m3-integration-report
+          path: |
+            /tmp/m3_integration_report.txt
+            /tmp/m3_gate_console.log
