@@ -32,6 +32,11 @@ jobs:
     runs-on: ubuntu-22.04
     container:
       image: ubuntu:20.04
+    # Non-interactive package install: the ubuntu:20.04 container's apt-get
+    # prompts for tzdata (geographic-area debconf) and hangs CI unattended.
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      TZ: Etc/UTC
     # Incremental headroom over the initial 180m: a full --enable-debug Dogecoin
     # build is slow. A timeout is treated as an infrastructure result, not an M3
     # failure; raise further only if a timeout is observed with evidence.

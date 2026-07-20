@@ -17,6 +17,11 @@ jobs:
     runs-on: ubuntu-22.04
     container:
       image: ubuntu:20.04
+    # Non-interactive package install: the ubuntu:20.04 container's apt-get
+    # prompts for tzdata (geographic-area debconf) and hangs CI unattended.
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      TZ: Etc/UTC
     timeout-minutes: 120
     steps:
       - name: Checkout
