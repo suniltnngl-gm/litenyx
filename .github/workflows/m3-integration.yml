@@ -51,6 +51,7 @@ jobs:
         run: |
           apt-get update
           apt-get install -y \
+            git \
             build-essential libtool autotools-dev automake pkg-config \
             bsdmainutils python3 python3-pip libssl-dev libevent-dev \
             libboost-all-dev \
