@@ -49,6 +49,7 @@ jobs:
 
       - name: Install build deps (Dogecoin + boost + pytest)
         run: |
+          export DEBIAN_FRONTEND=noninteractive
           apt-get update
           apt-get install -y \
             git \
