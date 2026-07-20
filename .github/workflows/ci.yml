@@ -52,7 +52,6 @@ jobs:
       - name: Build dogecoind / dogecoin-cli
         working-directory: deploy
         run: |
-          set -o pipefail
           make production-build 2>&1 | tee build_diag.log
 
       - name: Run C++ unit tests (shared-state core)

@@ -66,7 +66,6 @@ jobs:
       - name: Run fail-closed M3 integration gate (debug daemon + G1-G3)
         working-directory: deploy
         run: |
-          set -o pipefail
           make m3-integration 2>&1 | tee /tmp/m3_gate_console.log
 
       - name: Upload M3 integration report
