@@ -1,5 +1,5 @@
 diff --git a/src/rpc/mining.cpp b/src/rpc/mining.cpp
-index 9e231baaf..6e6deceb8 100644
+index 9e231baaf..19b5cd170 100644
 --- a/src/rpc/mining.cpp
 +++ b/src/rpc/mining.cpp
 @@ -18,6 +18,12 @@
@@ -15,7 +15,7 @@ index 9e231baaf..6e6deceb8 100644
  #include "txmempool.h"
  #include "util.h"
  #include "utilstrencodings.h"
-@@ -30,6 +36,17 @@
+@@ -30,6 +36,23 @@
  
  #include <univalue.h>
  
@@ -26,19 +26,20 @@ index 9e231baaf..6e6deceb8 100644
 +UniValue testlitenyxtopoauthority(const JSONRPCRequest& request);
 +UniValue testlitenyxlifecycle(const JSONRPCRequest& request);
 +UniValue testlitenyxexecauthority(const JSONRPCRequest& request);
++
 +#ifndef NDEBUG
-+UniValue testlitenyxforceflushfail(const JSONRPCRequest& request);
 +// Forward declaration of the INT-OPEN-1 / M3 G1 arming helper defined in
 +// src/validation.cpp (gated behind #ifndef NDEBUG there as well). Declared here
 +// so this RPC can arm the forced-flush hook without pulling in validation.cpp's
 +// internal atomic. Debug-gated to match the definition/consumer.
++UniValue testlitenyxforceflushfail(const JSONRPCRequest& request);
 +void LitenyxArmForceFlushFail(bool arm);
-+#endif
++#endif // NDEBUG
 +
  using namespace std;
  
  /**
-@@ -1366,8 +1383,521 @@ static const CRPCCommand commands[] =
+@@ -1366,8 +1389,496 @@ static const CRPCCommand commands[] =
      { "util",               "estimatepriority",       &estimatepriority,       true,  {"nblocks"} },
      { "util",               "estimatesmartfee",       &estimatesmartfee,       true,  {"nblocks"} },
      { "util",               "estimatesmartpriority",  &estimatesmartpriority,  true,  {"nblocks"} },
@@ -48,9 +49,6 @@ index 9e231baaf..6e6deceb8 100644
 +    { "litenyx",            "testlitenyxtopoauthority",&testlitenyxtopoauthority,true,  {"mode","net","height","arg4","arg5"} },
 +    { "litenyx",            "testlitenyxlifecycle",    &testlitenyxlifecycle,    true,  {"mode","net","height","arg4","arg5"} },
 +    { "litenyx",            "testlitenyxexecauthority",&testlitenyxexecauthority,true,  {"mode","net","height","arg4","arg5"} },
-+#ifndef NDEBUG
-+    { "litenyx",            "testlitenyxforceflushfail",&testlitenyxforceflushfail,true,  {"arm"} },
-+#endif
  };
  
 +/** Litenyx Phase 2 regtest-only RPC: exercise the REAL global shared spent-set
@@ -148,28 +146,6 @@ index 9e231baaf..6e6deceb8 100644
 +        throw JSONRPCError(RPC_MISC_ERROR, std::string("LITENYX-sharedstate: ") + e.what());
 +    }
 +}
-+
-+#ifndef NDEBUG
-+UniValue testlitenyxforceflushfail(const JSONRPCRequest& request)
-+{
-+    // INT-OPEN-1 / M3 integration test hook (G1). Arms (or disarms) the forced
-+    // FlushStateToDisk-failure simulation consumed by the NEXT ConnectTip that
-+    // reaches its post-flush tail (see src/validation.cpp ConnectTip). Debug-only
-+    // behavior; in -NDEBUG builds the flag is never consulted. Lets the regtest
-+    // harness force the exact INT-Q4 window: ConnectBlock OK + flush "fails" =>
-+    // live shared set must be unchanged.
-+    if (request.fHelp || request.params.size() < 1)
-+        throw std::runtime_error(
-+            "testlitenyxforceflushfail \"arm\"\n"
-+            "\nArm (true) or disarm (false) the forced chainstate-flush failure.\n");
-+    bool arm = request.params[0].get_bool();
-+    LitenyxArmForceFlushFail(arm);
-+    UniValue out(UniValue::VOBJ);
-+    out.pushKV("armed", arm);
-+    return out;
-+}
-+
-+#endif // NDEBUG
 +
 +/** Litenyx Phase 3 regtest-only RPC: exercise the REAL topology tracker (the
 + *  same module ConnectBlock/DisconnectBlock use) to prove the invariant
