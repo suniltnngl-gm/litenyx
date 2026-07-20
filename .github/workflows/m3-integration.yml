@@ -53,15 +53,6 @@ jobs:
         working-directory: deploy
         run: make clone-dogecoin
 
-      - name: Normalize M3 RPC patch hunk metadata
-        working-directory: deploy
-        run: |
-          # The debug-only LitenyxArmForceFlushFail forward declaration added one
-          # line to this hunk. Keep the unified-diff new-file line count consistent
-          # so git apply can consume the integration-scaffolding patch.
-          sed -i 's/@@ -30,6 +36,23 @@/@@ -30,6 +36,22 @@/' patches/litenyx-rpc.patch
-          grep -F '@@ -30,6 +36,22 @@' patches/litenyx-rpc.patch
-
       - name: Run fail-closed M3 integration gate (debug daemon + G1-G3)
         working-directory: deploy
         run: |
