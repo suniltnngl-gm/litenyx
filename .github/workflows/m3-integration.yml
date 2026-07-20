@@ -28,7 +28,10 @@ jobs:
     # void* -> function pointer). This is a CI toolchain pin only; no Dogecoin
     # or Litenyx source is modified.
     runs-on: ubuntu-22.04
-    timeout-minutes: 180
+    # Incremental headroom over the initial 180m: a full --enable-debug Dogecoin
+    # build is slow. A timeout is treated as an infrastructure result, not an M3
+    # failure; raise further only if a timeout is observed with evidence.
+    timeout-minutes: 240
     steps:
       - name: Checkout
         uses: actions/checkout@v4
