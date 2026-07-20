@@ -28,6 +28,11 @@ index 9e231baaf..6e6deceb8 100644
 +UniValue testlitenyxexecauthority(const JSONRPCRequest& request);
 +#ifndef NDEBUG
 +UniValue testlitenyxforceflushfail(const JSONRPCRequest& request);
++// Forward declaration of the INT-OPEN-1 / M3 G1 arming helper defined in
++// src/validation.cpp (gated behind #ifndef NDEBUG there as well). Declared here
++// so this RPC can arm the forced-flush hook without pulling in validation.cpp's
++// internal atomic. Debug-gated to match the definition/consumer.
++void LitenyxArmForceFlushFail(bool arm);
 +#endif
 +
  using namespace std;
