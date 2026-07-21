@@ -194,7 +194,7 @@ def test_g2_successful_connect_publishes_once(node):
     # This avoids wallet coin-selection ambiguity (sendtoaddress may pick a
     # different UTXO, causing the query to miss the actual spend).
     raw = node("createrawtransaction",
-               json.dumps([{"txid": spent_txid, "n": spent_n}]),
+               json.dumps([{"txid": spent_txid, "vout": spent_n}]),
                json.dumps({addr: utxo["amount"] - 0.0001}))
     signed = node("signrawtransaction", raw)
     hex_tx = signed["hex"] if isinstance(signed, dict) else signed
