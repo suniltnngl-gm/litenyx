@@ -1,5 +1,5 @@
 diff --git a/src/validation.cpp b/src/validation.cpp
-index a0541361b..2cccfcb77 100644
+index a054136..6b14b91 100644
 --- a/src/validation.cpp
 +++ b/src/validation.cpp
 @@ -33,6 +33,9 @@
@@ -146,21 +146,26 @@ index a0541361b..2cccfcb77 100644
      int64_t nTime1 = GetTimeMicros();
      if (!pblock) {
          std::shared_ptr<CBlock> pblockNew = std::make_shared<CBlock>();
-@@ -2353,6 +2462,24 @@ bool static ConnectTip(CValidationState& state, const CChainParams& chainparams,
-     mempool.removeForBlock(blockConnecting.vtx, pindexNew->nHeight);
-     // Update chainActive & related variables.
-     UpdateTip(pindexNew, chainparams);
+@@ -2349,10 +2458,29 @@ bool static ConnectTip(CValidationState& state, const CChainParams& chainparams,
+         return false;
+     int64_t nTime5 = GetTimeMicros(); nTimeChainState += nTime5 - nTime4;
+     LogPrint("bench", "  - Writing chainstate: %.2fms [%.2fs]\n", (nTime5 - nTime4) * 0.001, nTimeChainState * 0.000001);
 +#ifndef NDEBUG
 +    // Litenyx INT-OPEN-1 / M3 INTEGRATION TEST HOOK (G1): if a test armed the
 +    // forced chainstate-flush failure, simulate FlushStateToDisk failing AFTER
-+    // ConnectBlock succeeded and AFTER the real flush. Return false WITHOUT
-+    // publishing the staged delta, exercising the exact INT-Q4 failure window:
-+    // ConnectBlock OK + flush "fails" => the attempt-scoped delta must discard
-+    // and leave the live shared set unchanged. Debug builds only; never in -NDEBUG.
++    // ConnectBlock succeeded and AFTER the real flush. Return false BEFORE the
++    // irreversible state mutations (mempool.removeForBlock, UpdateTip), so the
++    // caller's failure path works correctly. The attempt-scoped
++    // LitenyxSpendPublishScope destructor discards the staged shared-set delta.
++    // Test only; never in -NDEBUG. Reset-on-consume.
 +    if (g_litenyxForceFlushFail.exchange(false)) {
 +        return false;
 +    }
 +#endif
+     // Remove conflicting transactions from the mempool.;
+     mempool.removeForBlock(blockConnecting.vtx, pindexNew->nHeight);
+     // Update chainActive & related variables.
+     UpdateTip(pindexNew, chainparams);
 +    // Litenyx INT-OPEN-1 / M3: the last failure-capable step (FlushStateToDisk,
 +    // above) has succeeded and the tip has been updated; this block is now
 +    // canonical and connection cannot fail. Publish the staged candidate delta to
