@@ -22,7 +22,7 @@ BOOST_TEST ?= -lboost_unit_test_framework
 # Dogecoin Core v1.14.9 (INT-Q5 hard pin; see comment above for rationale)
 DOGECOIN_PIN ?= e0a1c157791544e818c901bd9341896965afbf9d
 
-KERRNYX_INCLUDES = -I$(REPO_ROOT) -I$(REPO_ROOT)/cpp_reference -I$(DOGECOIN_DIR)/src
+KERRNYX_INCLUDES = -I$(REPO_ROOT) -I$(REPO_ROOT)/cpp_reference -I$(DOGECOIN_DIR)/src -I$(DOGECOIN_DIR)/src/config
 KERRNYX_TEST_SRC = $(REPO_ROOT)/cpp_reference/test/test_litenyx.cpp
 KERRNYX_TEST_BIN = $(REPO_ROOT)/cpp_reference/test/test_litenyx
 KERRNYX_TOPO_SRC = $(REPO_ROOT)/cpp_reference/test/test_litenyx_topology.cpp
