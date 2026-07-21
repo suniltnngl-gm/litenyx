@@ -14,9 +14,6 @@ CXX ?= g++
 # debug-build step that runs first), so no compiler-specific workaround is
 # needed. The same compiler $(CXX) is used for both the daemon and KATs.
 BOOST_TEST ?= -lboost_unit_test_framework
-# Suppress Boost.Test wchar_t stream output (deleted in C++20 / g++-10).
-# Build-infra only; no consensus change.
-BOOST_TEST_CXXFLAGS ?= -DBOOST_TEST_NO_WCHAR_T
 
 # INT-Q5 (pin): the M3 attach points (ConnectTip failure boundary) were VERIFIED
 # against Dogecoin v1.14.9. Pin the base to the EXACT commit so the daemon built
@@ -169,8 +166,8 @@ m3-integration: production-build-debug
 	@echo "[3/5] Debug daemon present:"
 	@test -x $(DOGECOIN_DIR)/src/dogecoind || { echo "FATAL: dogecoind missing"; exit 1; }
 	@echo "[4/5] M3 real-class delta KATs (6/6 required):"
-	$(CXX) -std=c++20 -O0 \
-		-DKERRNYX_STANDALONE_TEST -DHAVE_CONFIG_H $(BOOST_TEST_CXXFLAGS) \
+	$(CXX) -std=c++17 -O0 \
+		-DKERRNYX_STANDALONE_TEST -DHAVE_CONFIG_H \
 		$(KERRNYX_INCLUDES) $(KERRNYX_DELTA_SRC) $(KERRNYX_DOGE_SUPPORT) \
 		-o $(KERRNYX_DELTA_BIN) \
 		-lpthread $(BOOST_TEST) && $(KERRNYX_DELTA_BIN)
