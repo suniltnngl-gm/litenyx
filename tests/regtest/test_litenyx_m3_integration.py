@@ -151,7 +151,10 @@ def test_g1_failed_connect_leaves_sss_unchanged(node):
     assert before is False, "precondition: U must start unspent"
 
     # Arm the forced failure, then trigger a real block connect (mine one block).
-    node("testlitenyxforceflushfail", True)
+    # NOTE: pass integer 1/0, not Python bool — the node() helper str()-ifies
+    # all args, and the Dogecoin CLI sends the result as a JSON string, which
+    # the handler's UniValue parsing would not recognize as a boolean.
+    node("testlitenyxforceflushfail", 1)
     try:
         # The connect will reach ConnectTip's post-flush tail and return false.
         # generatetoaddress should report failure / the block must not commit.
@@ -160,7 +163,7 @@ def test_g1_failed_connect_leaves_sss_unchanged(node):
         except RuntimeError:
             pass  # expected: connect failed at the forced-flush boundary
     finally:
-        node("testlitenyxforceflushfail", False)
+        node("testlitenyxforceflushfail", 0)
 
     after = _sss_spent(node, U)
     assert after == before, (
