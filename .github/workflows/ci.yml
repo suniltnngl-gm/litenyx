@@ -4,11 +4,28 @@ on:
   push:
     branches: [main]
   pull_request:
+    branches: [main]
   workflow_dispatch:
 
 jobs:
   build-and-test:
-    runs-on: ubuntu-latest
+    # The ubuntu-20.04 HOSTED-RUNNER LABEL is no longer reliably schedulable on
+    # GitHub (jobs stuck queued). Run on a serviceable runner (ubuntu-22.04) but
+    # reproduce the Dogecoin Core v1.14.9-compatible toolchain inside an
+    # ubuntu:20.04 container (glibc 2.31 / Boost 1.71) to avoid the
+    # boost::signals2 static_cast (glibc 2.39) and endian.h bswap redefinition
+    # (glibc 2.35) failures. CI toolchain pin only; no source changed.
+    runs-on: ubuntu-22.04
+    container:
+      image: ubuntu:20.04
+    # Non-interactive package install: the ubuntu:20.04 container's apt-get
+    # prompts for tzdata (geographic-area debconf) and hangs CI unattended.
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      TZ: Etc/UTC
+      # C++20-capable compiler for the cpp-test KATs (-std=c++20); g++-9 only
+      # accepts -std=c++2a. Build-infra only.
+      CXX: g++-10
     timeout-minutes: 120
     steps:
       - name: Checkout
@@ -18,13 +35,16 @@ jobs:
 
       - name: Install build deps (Dogecoin)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y \
+            git \
             build-essential libtool autotools-dev automake pkg-config \
             bsdmainutils python3 python3-pip libssl-dev libevent-dev \
             libboost-all-dev \
             libboost-test-dev libboost-thread-dev libboost-chrono-dev \
-            libminiupnpc-dev libzmq3-dev libsqlite3-dev libdb++-dev libfmt-dev
+            libminiupnpc-dev libzmq3-dev libsqlite3-dev libdb++-dev libfmt-dev \
+            g++-10
           python3 -m pip install --upgrade pip pytest
 
       - name: Clone Dogecoin base
@@ -38,8 +58,9 @@ jobs:
       - name: Build dogecoind / dogecoin-cli
         working-directory: deploy
         run: |
-          set -o pipefail
-          make production-build 2>&1 | tee build_diag.log
+          make production-build > build_diag.log 2>&1; rc=$?
+          cat build_diag.log
+          exit $rc
 
       - name: Run C++ unit tests (shared-state core)
         working-directory: deploy

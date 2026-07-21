@@ -29,3 +29,8 @@ KerrNyx-build-diag
 __pycache__/
 *.pyc
 
+# Internal documentation — not published to GitHub
+docs/
+deploy/docs/
+*.white_paper.md
+
