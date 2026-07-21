@@ -49,6 +49,9 @@ index 9e231baaf..19b5cd170 100644
 +    { "litenyx",            "testlitenyxtopoauthority",&testlitenyxtopoauthority,true,  {"mode","net","height","arg4","arg5"} },
 +    { "litenyx",            "testlitenyxlifecycle",    &testlitenyxlifecycle,    true,  {"mode","net","height","arg4","arg5"} },
 +    { "litenyx",            "testlitenyxexecauthority",&testlitenyxexecauthority,true,  {"mode","net","height","arg4","arg5"} },
++#ifndef NDEBUG
++    { "litenyx",            "testlitenyxforceflushfail",&testlitenyxforceflushfail,true,  {} },
++#endif
  };
  
 +/** Litenyx Phase 2 regtest-only RPC: exercise the REAL global shared spent-set
@@ -532,6 +535,41 @@ index 9e231baaf..19b5cd170 100644
 +        throw JSONRPCError(RPC_MISC_ERROR, std::string("LITENYX-execauthority: ") + e.what());
 +    }
 +}
++
++#ifndef NDEBUG
++/** Litenyx INT-OPEN-1 / M3 G1 regtest-only RPC: arm the forced flush-failure
++ *  hook installed in ConnectTip. When the next ConnectTip reaches its
++ *  post-flush tail, it will read-and-reset the atomic and return false,
++ *  simulating a chainstate flush failure AFTER ConnectBlock succeeded.
++ *  This exercises the M3 atomicity invariant: a post-ConnectBlock failure
++ *  must leave the live shared spent set unchanged (R3/SS-INV-4).
++ *
++ *  Arguments: a boolean "arm" (true to arm, false to disarm).
++ *  Returns: {"armed": true|false}.
++ *
++ *  Debug-build only (gated at both declaration and registration).
++ */
++UniValue testlitenyxforceflushfail(const JSONRPCRequest& request)
++{
++    if (request.fHelp || request.params.size() < 1)
++        throw std::runtime_error(
++            "testlitenyxforceflushfail \"arm\"\n"
++            "\nArm a simulated FlushStateToDisk failure on next ConnectTip.\n"
++            "arm: true (arm) or false (disarm). Debug builds only.\n");
++
++    try {
++        bool arm = request.params[0].isBool()
++            ? request.params[0].get_bool()
++            : (request.params[0].get_int() != 0);
++        LitenyxArmForceFlushFail(arm);
++        UniValue out(UniValue::VOBJ);
++        out.pushKV("armed", arm);
++        return out;
++    } catch (const std::exception& e) {
++        throw JSONRPCError(RPC_MISC_ERROR, std::string("LITENYX-forceflushfail: ") + e.what());
++    }
++}
++#endif // NDEBUG
 +
  void RegisterMiningRPCCommands(CRPCTable &t)
  {
