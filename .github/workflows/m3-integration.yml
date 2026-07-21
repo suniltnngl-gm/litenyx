@@ -62,6 +62,14 @@ jobs:
         run: |
           export DEBIAN_FRONTEND=noninteractive
           apt-get update
+          # Install LLVM 12+ for working endian.h compilation (clang-10 on glibc-2.31
+          # double-defines bswap prototypes). Build-infra only; no consensus change.
+          apt-get install -y wget ca-certificates gnupg
+          wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | apt-key add -
+          echo "deb http://apt.llvm.org/focal/ llvm-toolchain-focal-12 main" > /etc/apt/sources.list.d/llvm-toolchain.list
+          apt-get update
+          apt-get install -y llvm clang-12 libclang-12-dev
+          update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-12 100
           apt-get install -y \
             git \
             build-essential libtool autotools-dev automake pkg-config \
@@ -69,7 +77,7 @@ jobs:
             libboost-all-dev \
             libboost-test-dev libboost-thread-dev libboost-chrono-dev \
             libminiupnpc-dev libzmq3-dev libsqlite3-dev libdb++-dev libfmt-dev \
-            g++-10 clang
+            g++-10
           python3 -m pip install --upgrade pip pytest
 
       - name: Clone Dogecoin base (pin e0a1c157)
