@@ -176,8 +176,9 @@ m3-integration: production-build-debug
 		LITENYXD_BIN=$(DOGECOIN_DIR)/src/dogecoind \
 		LITENYX_CLI_BIN=$(DOGECOIN_DIR)/src/dogecoin-cli \
 		python3 -m pytest test_litenyx_m3_integration.py -v -p no:cacheprovider \
-		--tb=short -rA | tee /tmp/m3_integration_report.txt ; \
+			--tb=short -rA > /tmp/m3_integration_report.txt 2>&1; \
 		status=$$? ; \
+		cat /tmp/m3_integration_report.txt ; \
 		if [ $$status -ne 0 ]; then echo "FATAL: M3 integration suite failed (rc=$$status)"; exit 1; fi ; \
 		if grep -qiE "skipped|[0-9]+ skipped" /tmp/m3_integration_report.txt; then \
 			echo "FATAL: M3 integration suite reports SKIPPED tests; a skipped G1-G3 is NOT success."; exit 1; \
