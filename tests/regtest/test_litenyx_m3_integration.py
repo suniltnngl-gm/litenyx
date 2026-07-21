@@ -183,15 +183,22 @@ def test_g2_successful_connect_publishes_once(node):
     # Grab a known UTXO before spending, so we can query its outpoint after.
     utxos = node("listunspent")
     utxo = utxos[0]
-    spent_op = (utxo["txid"], utxo["vout"])
+    spent_txid = utxo["txid"]
+    spent_n = utxo["vout"]
+    spent_op = (spent_txid, spent_n)
 
     # Verify the outpoint starts unspent in the SSS.
     assert _sss_spent(node, spent_op) is False, "precondition: UTXO must start unspent"
 
-    # Spend it via a real transaction, then mine it into a block.
-    # Use amount - fee to avoid "insufficient funds" from using exact balance.
-    send_amount = utxo["amount"] - 0.0001
-    node("sendtoaddress", addr, send_amount)
+    # Build, sign, and broadcast a raw tx that explicitly spends our chosen UTXO.
+    # This avoids wallet coin-selection ambiguity (sendtoaddress may pick a
+    # different UTXO, causing the query to miss the actual spend).
+    raw = node("createrawtransaction",
+               json.dumps([{"txid": spent_txid, "n": spent_n}]),
+               json.dumps({addr: utxo["amount"] - 0.0001}))
+    signed = node("signrawtransaction", raw)
+    hex_tx = signed["hex"] if isinstance(signed, dict) else signed
+    node("sendrawtransaction", hex_tx)
     node("generatetoaddress", 1, addr)
 
     # The spend's outpoint is now canonical; query must confirm it globally spent.
