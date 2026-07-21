@@ -82,7 +82,10 @@ jobs:
           # Fail-closed: capture make's exit code and propagate it. We avoid
           # 'set -o pipefail' (unsupported by dash, the container's /bin/sh)
           # by writing to a log, capturing rc, printing, then exiting with rc.
-          make m3-integration > /tmp/m3_gate_console.log 2>&1; rc=$?
+          # NOTE: 'if' block is used (not bare '; rc=$?') because the container
+          # runs with 'sh -e' which terminates on a bare non-zero command.
+          rc=0
+          if make m3-integration > /tmp/m3_gate_console.log 2>&1; then :; else rc=$?; fi
           cat /tmp/m3_gate_console.log
           exit $rc
 
