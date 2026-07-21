@@ -179,7 +179,14 @@ m3-integration: production-build-debug
 			--tb=short -rA > /tmp/m3_integration_report.txt 2>&1; \
 		status=$$? ; \
 		cat /tmp/m3_integration_report.txt ; \
-		if [ $$status -ne 0 ]; then echo "FATAL: M3 integration suite failed (rc=$$status)"; exit 1; fi ; \
+		if [ $$status -ne 0 ]; then \
+			echo "=== DAEMON STDERR DUMPS ===" ; \
+			for f in /tmp/Litenyx-M3-*/dogecoind.stderr.log ; do \
+				if [ -f "$$f" ]; then echo "--- $$f ---"; cat "$$f"; fi ; \
+			done ; \
+			echo "=== END DAEMON STDERR DUMPS ===" ; \
+			echo "FATAL: M3 integration suite failed (rc=$$status)"; exit 1; \
+		fi ; \
 		if grep -qiE "skipped|[0-9]+ skipped" /tmp/m3_integration_report.txt; then \
 			echo "FATAL: M3 integration suite reports SKIPPED tests; a skipped G1-G3 is NOT success."; exit 1; \
 		fi ; \

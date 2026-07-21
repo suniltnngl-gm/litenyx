@@ -66,7 +66,7 @@ def _outpoints(specs):
     return json.dumps([{"txid": t, "n": n} for (t, n) in specs])
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="function")
 def node():
     datadir = tempfile.mkdtemp(prefix="Litenyx-M3-")
     rpc_port = random.randint(20000, 40000)
