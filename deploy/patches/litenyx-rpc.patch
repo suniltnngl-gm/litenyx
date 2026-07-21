@@ -1,5 +1,5 @@
 diff --git a/src/rpc/mining.cpp b/src/rpc/mining.cpp
-index 9e231baaf..54304f04f 100644
+index 9e231ba..a3b8005 100644
 --- a/src/rpc/mining.cpp
 +++ b/src/rpc/mining.cpp
 @@ -18,6 +18,12 @@
@@ -36,7 +36,7 @@ index 9e231baaf..54304f04f 100644
  using namespace std;
  
  /**
-@@ -1366,8 +1386,441 @@ static const CRPCCommand commands[] =
+@@ -1366,8 +1386,443 @@ static const CRPCCommand commands[] =
      { "util",               "estimatepriority",       &estimatepriority,       true,  {"nblocks"} },
      { "util",               "estimatesmartfee",       &estimatesmartfee,       true,  {"nblocks"} },
      { "util",               "estimatesmartpriority",  &estimatesmartpriority,  true,  {"nblocks"} },
@@ -464,7 +464,9 @@ index 9e231baaf..54304f04f 100644
 +    try {
 +        bool arm = request.params[0].isBool()
 +            ? request.params[0].get_bool()
-+            : (request.params[0].get_int() != 0);
++            : request.params[0].isNum()
++                ? (request.params[0].get_int() != 0)
++                : (request.params[0].get_str() == "1" || request.params[0].get_str() == "true");
 +        LitenyxArmForceFlushFail(arm);
 +        UniValue out(UniValue::VOBJ);
 +        out.pushKV("armed", arm);
