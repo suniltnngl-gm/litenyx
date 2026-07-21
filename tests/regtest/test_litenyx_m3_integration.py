@@ -182,13 +182,20 @@ def test_g2_successful_connect_publishes_once(node):
     # A real spend that lands in a connected block: send, then mine it in.
     res = node("sendtoaddress", addr, 10)
     txid = res["txid"] if isinstance(res, dict) else res
+
+    # Resolve the actual spent outpoints (inputs) from the sendtoaddress tx,
+    # so we query the SSS for the prevouts that ConnectBlock staged as spent.
+    tx_details = node("gettransaction", txid)
+    vin0 = tx_details["vin"][0]
+    spent_op = (vin0["txid"], vin0["vout"])
+
     node("generatetoaddress", 1, addr)
 
     # The spend's outpoint is now canonical; query must confirm it globally spent.
-    assert _sss_spent(node, (txid, 0)) is True, "G2: connected spend not visible after success"
+    assert _sss_spent(node, spent_op) is True, "G2: connected spend not visible after success"
 
     # Idempotence: state stable on re-query (no double-publish side effects).
-    assert _sss_spent(node, (txid, 0)) is True
+    assert _sss_spent(node, spent_op) is True
 
 
 # ---- G3: disconnect/reorg inverse restores the live set ----------------------
