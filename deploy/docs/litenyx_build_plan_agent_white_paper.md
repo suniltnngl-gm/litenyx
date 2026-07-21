@@ -7,6 +7,20 @@
 
 ---
 
+## Executive Summary
+
+**Litenyx is the experimental Dogecoin-derived blockchain used to prove the Liten protocol foundation.** Its principal customizations are deterministic Dynamic Lane Topology, lane/geographic economic differentiation, and chain-specific minimum-balance spam protection.
+
+**Liten0 is the intended first real Planet** and introduces the matured bounded-adaptation philosophy. Subsequent Liten(x) Planets form the **Liten Universe**, with approximately 2.5-year generation cadence, approximately 25-year planetary horizons, approximately five-year halving epochs, forward-only inter-planet migration, and deterministic distance-based supply removal.
+
+**Lanes scale within a Planet; Planets extend the blockchain lineage across generations.** Inter-planet economics are architecturally defined, while their cryptographic settlement machinery remains OPEN until implementation and evidence prove it.
+
+The shortest description of the matured architecture:
+
+> Dogecoin Foundation + Minimal Litenyx Consensus Extensions → Liten0 → Liten(x) → Liten Universe
+
+---
+
 ## Table of Contents
 
 1. [Agent Reasoning Constitution](#1-agent-reasoning-constitution)
