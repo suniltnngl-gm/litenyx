@@ -78,6 +78,21 @@ jobs:
           cat build_diag.log
           exit $rc
 
+      - name: BOOST20 probe (temporary — CPP-BOOST20-COMPAT-1)
+        run: |
+          echo "=== g++-10 --version ===" && g++-10 --version
+          echo "=== Boost version ===" && grep 'BOOST_LIB_VERSION\|BOOST_VERSION' /usr/include/boost/version.hpp | head -5
+          echo "=== Boost test package ===" && dpkg -l | grep libboost-test || true
+          cat > /tmp/probe.cpp << 'CEOF'
+          #define BOOST_TEST_MODULE probe
+          #include <boost/test/included/unit_test.hpp>
+          BOOST_AUTO_TEST_CASE(smoke) { BOOST_TEST(true); }
+          CEOF
+          echo "--- Probe A: included + C++20 ---"
+          g++-10 -std=c++20 -O0 /tmp/probe.cpp -o /tmp/probe_c20 -lpthread && echo "COMPILE=PASS" && /tmp/probe_c20 && echo "RUN=PASS" || echo "RESULT=FAIL"
+          echo "--- Probe B: included + C++17 ---"
+          g++-10 -std=c++17 -O0 /tmp/probe.cpp -o /tmp/probe_c17 -lpthread && echo "COMPILE=PASS" && /tmp/probe_c17 && echo "RUN=PASS" || echo "RESULT=FAIL"
+
       - name: Run C++ unit tests (shared-state core)
         working-directory: deploy
         run: make cpp-test
