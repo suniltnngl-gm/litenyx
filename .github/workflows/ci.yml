@@ -83,15 +83,35 @@ jobs:
           echo "=== g++-10 --version ===" && g++-10 --version
           echo "=== Boost version ===" && grep 'BOOST_LIB_VERSION\|BOOST_VERSION' /usr/include/boost/version.hpp | head -5
           echo "=== Boost test package ===" && dpkg -l | grep libboost-test || true
-          cat > /tmp/probe.cpp << 'CEOF'
+
+          cat > /tmp/probe_included.cpp << 'CEOF'
           #define BOOST_TEST_MODULE probe
           #include <boost/test/included/unit_test.hpp>
           BOOST_AUTO_TEST_CASE(smoke) { BOOST_TEST(true); }
           CEOF
+          cat > /tmp/probe_linked.cpp << 'CEOF'
+          #define BOOST_TEST_MODULE probe
+          #include <boost/test/unit_test.hpp>
+          BOOST_AUTO_TEST_CASE(smoke) { BOOST_TEST(true); }
+          CEOF
+
           echo "--- Probe A: included + C++20 ---"
-          g++-10 -std=c++20 -O0 /tmp/probe.cpp -o /tmp/probe_c20 -lpthread && echo "COMPILE=PASS" && /tmp/probe_c20 && echo "RUN=PASS" || echo "RESULT=FAIL"
+          g++-10 -std=c++20 -O0 /tmp/probe_included.cpp -o /tmp/probe_inc_c20 -lpthread && echo "COMPILE=PASS" && /tmp/probe_inc_c20 && echo "RUN=PASS" || echo "RESULT=FAIL"
           echo "--- Probe B: included + C++17 ---"
-          g++-10 -std=c++17 -O0 /tmp/probe.cpp -o /tmp/probe_c17 -lpthread && echo "COMPILE=PASS" && /tmp/probe_c17 && echo "RUN=PASS" || echo "RESULT=FAIL"
+          g++-10 -std=c++17 -O0 /tmp/probe_included.cpp -o /tmp/probe_inc_c17 -lpthread && echo "COMPILE=PASS" && /tmp/probe_inc_c17 && echo "RUN=PASS" || echo "RESULT=FAIL"
+          echo "--- Probe C: linked + C++20 ---"
+          g++-10 -std=c++20 -O0 /tmp/probe_linked.cpp -o /tmp/probe_lnk_c20 -lpthread -lboost_unit_test_framework && echo "COMPILE=PASS" && /tmp/probe_lnk_c20 && echo "RUN=PASS" || echo "RESULT=FAIL"
+          echo "--- Probe D: linked + C++17 ---"
+          g++-10 -std=c++17 -O0 /tmp/probe_linked.cpp -o /tmp/probe_lnk_c17 -lpthread -lboost_unit_test_framework && echo "COMPILE=PASS" && /tmp/probe_lnk_c17 && echo "RUN=PASS" || echo "RESULT=FAIL"
+
+          echo "--- Probe E: linked test_litenyx.cpp + C++20 (actual file, linked mode) ---"
+          cp cpp_reference/test/test_litenyx.cpp /tmp/probe_litenyx_linked.cpp
+          sed -i 's|<boost/test/included/unit_test.hpp>|<boost/test/unit_test.hpp>|' /tmp/probe_litenyx_linked.cpp
+          grep 'boost/test' /tmp/probe_litenyx_linked.cpp
+          g++-10 -std=c++20 -O0 -DKERRNYX_STANDALONE_TEST \
+            -I. -Icpp_reference \
+            /tmp/probe_litenyx_linked.cpp -o /tmp/probe_litenyx_linked \
+            -lpthread -lboost_unit_test_framework && echo "COMPILE=PASS" && /tmp/probe_litenyx_linked && echo "RUN=PASS" || echo "RESULT=FAIL"
 
       - name: Run C++ unit tests (shared-state core)
         working-directory: deploy
