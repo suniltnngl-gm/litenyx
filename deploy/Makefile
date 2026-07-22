@@ -215,7 +215,7 @@ cpp-test:
 		echo "Running Litenyx draining authority unit test (Phase 7)..." && \
 		$(KERRNYX_DRAIN_BIN)
 	@echo "Compiling Litenyx shared-delta unit test (INT-OPEN-1 / M3)..."
-	$(CXX) -std=c++20 -O0 -DKERRNYX_STANDALONE_TEST \
+	$(CXX) -std=c++20 -O0 -DKERRNYX_STANDALONE_TEST -DHAVE_CONFIG_H \
 		$(KERRNYX_INCLUDES) $(KERRNYX_DELTA_SRC) $(KERRNYX_DOGE_SUPPORT) -o $(KERRNYX_DELTA_BIN) \
 		-lpthread $(BOOST_TEST) && \
 		echo "Running Litenyx shared-delta unit test (INT-OPEN-1 / M3)..." && \
