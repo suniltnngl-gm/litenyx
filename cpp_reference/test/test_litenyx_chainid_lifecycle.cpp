@@ -24,7 +24,7 @@
 #include <litenyx/LITENYX_types.h>
 
 #define BOOST_TEST_MODULE LITENYX_chainid_lifecycle_test
-#include <boost/test/included/unit_test.hpp>
+#include <boost/test/unit_test.hpp>
 
 #include <vector>
 #include <cstdint>

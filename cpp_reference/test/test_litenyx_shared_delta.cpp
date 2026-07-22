@@ -21,7 +21,7 @@
 #include <litenyx/LITENYX_sharedstate.h>
 
 #define BOOST_TEST_MODULE LITENYX_shared_delta_test
-#include <boost/test/included/unit_test.hpp>
+#include <boost/test/unit_test.hpp>
 
 #include <cstdint>
 #include <cstdio>
