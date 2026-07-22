@@ -1,0 +1,92 @@
+name: CPP-BOOST20-COMPAT-1 Probe
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-22.04
+    container:
+      image: ubuntu:20.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      TZ: Etc/UTC
+    steps:
+      - name: Install build deps
+        run: |
+          set -e
+          for i in 1 2 3; do
+            if [ "$i" -ge 2 ]; then
+              sed -i 's|archive\.ubuntu\.com|us.archive.ubuntu.com|g' /etc/apt/sources.list
+            fi
+            apt-get update
+            if apt-get install -y build-essential libboost-test-dev g++-10; then
+              return 0
+            fi
+            sleep 30
+          done
+          echo "ERROR: apt-get failed"
+          return 1
+
+      - name: Capture toolchain info
+        run: |
+          echo "=== g++ version ===" && g++-10 --version
+          echo "=== Boost lib version ===" && grep -r 'BOOST_LIB_VERSION' /usr/include/boost/version.hpp 2>/dev/null || true
+          echo "=== Boost test version ===" && dpkg -l | grep libboost-test 2>/dev/null || true
+
+      - name: Write probe files
+        run: |
+          cat > /tmp/probe_included.cpp << 'EOF'
+          #define BOOST_TEST_MODULE probe
+          #include <boost/test/included/unit_test.hpp>
+          BOOST_AUTO_TEST_CASE(smoke) { BOOST_TEST(true); }
+          EOF
+          cat > /tmp/probe_linked.cpp << 'EOF'
+          #define BOOST_TEST_MODULE probe
+          #include <boost/test/unit_test.hpp>
+          BOOST_AUTO_TEST_CASE(smoke) { BOOST_TEST(true); }
+          EOF
+
+      - name: Probe A — included mode + C++20
+        id: probe_a
+        run: |
+          echo "--- g++-10 -std=c++20 (included) ---"
+          if g++-10 -std=c++20 -O0 /tmp/probe_included.cpp -o /tmp/probe_included -lpthread 2>&1; then
+            echo "INCLUDED_CXX20=PASS"
+            /tmp/probe_included && echo "RUN_INCLUDED_CXX20=PASS" || echo "RUN_INCLUDED_CXX20=FAIL"
+          else
+            echo "INCLUDED_CXX20=FAIL"
+          fi
+
+      - name: Probe B — linked mode + C++20
+        id: probe_b
+        run: |
+          echo "--- g++-10 -std=c++20 (linked) ---"
+          if g++-10 -std=c++20 -O0 /tmp/probe_linked.cpp -o /tmp/probe_linked -lboost_unit_test_framework -lpthread 2>&1; then
+            echo "LINKED_CXX20=PASS"
+            /tmp/probe_linked && echo "RUN_LINKED_CXX20=PASS" || echo "RUN_LINKED_CXX20=FAIL"
+          else
+            echo "LINKED_CXX20=FAIL"
+          fi
+
+      - name: Probe C — included mode + C++17 (baseline)
+        id: probe_c
+        run: |
+          echo "--- g++-10 -std=c++17 (included) ---"
+          if g++-10 -std=c++17 -O0 /tmp/probe_included.cpp -o /tmp/probe_included17 -lpthread 2>&1; then
+            echo "INCLUDED_CXX17=PASS"
+            /tmp/probe_included17 && echo "RUN_INCLUDED_CXX17=PASS" || echo "RUN_INCLUDED_CXX17=FAIL"
+          else
+            echo "INCLUDED_CXX17=FAIL"
+          fi
+
+      - name: Probe D — linked mode + C++17 (baseline)
+        id: probe_d
+        run: |
+          echo "--- g++-10 -std=c++17 (linked) ---"
+          if g++-10 -std=c++17 -O0 /tmp/probe_linked.cpp -o /tmp/probe_linked17 -lboost_unit_test_framework -lpthread 2>&1; then
+            echo "LINKED_CXX17=PASS"
+            /tmp/probe_linked17 && echo "RUN_LINKED_CXX17=PASS" || echo "RUN_LINKED_CXX17=FAIL"
+          else
+            echo "LINKED_CXX17=FAIL"
+          fi
