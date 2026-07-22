@@ -60,16 +60,32 @@ jobs:
 
       - name: Install build deps (Dogecoin + boost + pytest)
         run: |
+          set -e
           export DEBIAN_FRONTEND=noninteractive
-          apt-get update
-          apt-get install -y \
-            git \
-            build-essential libtool autotools-dev automake pkg-config \
-            bsdmainutils python3 python3-pip libssl-dev libevent-dev \
-            libboost-all-dev \
-            libboost-test-dev libboost-thread-dev libboost-chrono-dev \
-            libminiupnpc-dev libzmq3-dev libsqlite3-dev libdb++-dev libfmt-dev \
-            g++-10
+          install_deps() {
+            for i in 1 2 3 4 5; do
+              if [ "$i" -ge 3 ]; then
+                echo "Switching to fallback mirror us.archive.ubuntu.com (attempt $i)"
+                sed -i 's|archive\.ubuntu\.com|us.archive.ubuntu.com|g' /etc/apt/sources.list
+              fi
+              apt-get update
+              if apt-get install -y \
+                git \
+                build-essential libtool autotools-dev automake pkg-config \
+                bsdmainutils python3 python3-pip libssl-dev libevent-dev \
+                libboost-all-dev \
+                libboost-test-dev libboost-thread-dev libboost-chrono-dev \
+                libminiupnpc-dev libzmq3-dev libsqlite3-dev libdb++-dev libfmt-dev \
+                g++-10; then
+                return 0
+              fi
+              echo "apt-get attempt $i failed, retrying in 60s..."
+              sleep 60
+            done
+            echo "ERROR: All apt-get attempts failed."
+            return 1
+          }
+          install_deps
           python3 -m pip install --upgrade pip pytest
 
       - name: Clone Dogecoin base (pin e0a1c157)
