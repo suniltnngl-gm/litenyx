@@ -84,4 +84,34 @@ bool LitenyxCheckLifecycleCommitment(const CBlock& block,
                                      const Consensus::Params& consensus,
                                      CValidationState& state);
 
+// Phase 6: consensus-critical EXECUTION-AUTHORITY enforcement (spec
+// docs/litenyx_execution_authority_spec_v0.1.md §4/§5/§6, frozen feba683).
+// Thin GLUE that CONSUMES (never reinterprets) the pure Phase-6 engine result.
+// It MUST be called AFTER LitenyxCheckLifecycleCommitment has returned true
+// (§6.2 layering), so a block can never route around lifecycle enforcement.
+// Given the block at height (pindexPrev->nHeight + 1), it:
+//   1. selects the frozen per-network INDEPENDENT Phase-6 activation and derives
+//      the regime; PreDerivation preserves legacy behavior;
+//   2. reconstructs expected L_h from CANONICAL CHAIN HISTORY ALONE (the SAME
+//      reconstruction Phase 4/5 use) — it does NOT reconstruct topology,
+//      lifecycle, active lanes, or ChainId allocation itself;
+//   3. resolves the block's asserted TopologyLaneId (nyx_aux.chainId) to its
+//      authoritative PersistentChainId on L_h via the pure engine adapter
+//      LitenyxResolveExecutionAuthorityForLane, and CONSUMES the result:
+//        Ok               -> true (AUTHORIZED may proceed; later gates independent)
+//        SoftAdvisory any  -> true (reportable; never fatal)
+//        Hard non-Ok      -> state.Invalid(...) + false (fail-closed):
+//            Unknown / Revoked / WrongLane / Premature / Malformed, each a
+//            DISTINCT reject reason (frozen precedence Malformed > Premature >
+//            projection is preserved by the pure engine; the hook never reorders).
+//
+// MUST be called OUTSIDE any try/catch (consensus-critical). The hook infers
+// authority NEVER from the claimed lane alone; the authoritative identity comes
+// from L_h. Re-derivation means DisconnectBlock needs NO undo.
+bool LitenyxCheckExecutionAuthority(const CBlock& block,
+                                    const CBlockIndex* pindexPrev,
+                                    const std::string& netId,
+                                    const Consensus::Params& consensus,
+                                    CValidationState& state);
+
 #endif // LITENYX_VALIDATION_H

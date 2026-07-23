@@ -23,7 +23,7 @@
 #include <litenyx/LITENYX_chainid_lifecycle.h>
 
 #define BOOST_TEST_MODULE LITENYX_v3_carrier_test
-#include <boost/test/included/unit_test.hpp>
+#include <boost/test/unit_test.hpp>
 
 #include <vector>
 #include <string>

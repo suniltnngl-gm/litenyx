@@ -1,0 +1,115 @@
+name: Litenyx INT-OPEN-1 / M3 Integration Gate
+
+# Fail-closed INT-OPEN-1 gate. Reproduces the repository's `make m3-integration`
+# contract in a clean Linux CI environment that can build the pinned debug
+# dogecoind (the local Windows/MSYS2 host cannot: no make/autotools/BDB).
+#
+# Contract (deploy/Makefile `m3-integration`):
+#   pin e0a1c157 (Dogecoin v1.14.9) -> inject-hooks (5 patches) ->
+#   DEBUG build (assert NO -DNDEBUG) -> M3 delta KATs 6/6 ->
+#   G1-G3 regtest (SKIP or FAIL => gate fails) -> verdict.
+#
+# This workflow only adds BUILD INFRASTRUCTURE. It changes no protocol design,
+# no frozen consensus semantics, and no production code. The gate logic lives in
+# deploy/Makefile and tests/regtest/test_litenyx_m3_integration.py.
+
+on:
+  push:
+    branches: [phase7-draining-authority, main]
+  pull_request:
+    branches: [phase7-draining-authority, main]
+  workflow_dispatch:
+
+# Ensure only one M3 gate runs per branch: a new push/PR update cancels any
+# in-flight run, preventing parallel/duplicate gate executions.
+concurrency:
+  group: m3-integration-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  m3-integration-gate:
+    # The ubuntu-20.04 HOSTED-RUNNER LABEL is no longer reliably schedulable on
+    # GitHub (jobs stuck queued 1-2.5h). We therefore run on a serviceable runner
+    # (ubuntu-22.04) but reproduce the exact Dogecoin Core v1.14.9-compatible
+    # toolchain inside an ubuntu:20.04 container: glibc 2.31 + Boost 1.71 avoid
+    # the boost::signals2 static_cast (glibc 2.39) and endian.h bswap redefinition
+    # (glibc 2.35) failures seen on newer hosts. CI toolchain pin only; no
+    # Dogecoin or Litenyx source is modified.
+    runs-on: ubuntu-22.04
+    container:
+      image: ubuntu:20.04
+    # Non-interactive package install: the ubuntu:20.04 container's apt-get
+    # prompts for tzdata (geographic-area debconf) and hangs CI unattended.
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      TZ: Etc/UTC
+      # Explicit C++20-capable compiler for the M3 KAT (-std=c++20). Ubuntu
+      # 20.04's default g++-9 only accepts -std=c++2a. g++-10 preserves the
+      # intended C++20 language-standard contract; the daemon also builds with
+      # it deterministically (pinned e0a1c157 source). Build-infra only.
+      CXX: g++-10
+    # Incremental headroom over the initial 180m: a full --enable-debug Dogecoin
+    # build is slow. A timeout is treated as an infrastructure result, not an M3
+    # failure; raise further only if a timeout is observed with evidence.
+    timeout-minutes: 240
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Install build deps (Dogecoin + boost + pytest)
+        run: |
+          set -e
+          export DEBIAN_FRONTEND=noninteractive
+          install_deps() {
+            for i in 1 2 3 4 5; do
+              if [ "$i" -ge 3 ]; then
+                echo "Switching to fallback mirror us.archive.ubuntu.com (attempt $i)"
+                sed -i 's|archive\.ubuntu\.com|us.archive.ubuntu.com|g' /etc/apt/sources.list
+              fi
+              apt-get update
+              if apt-get install -y \
+                git \
+                build-essential libtool autotools-dev automake pkg-config \
+                bsdmainutils python3 python3-pip libssl-dev libevent-dev \
+                libboost-all-dev \
+                libboost-test-dev libboost-thread-dev libboost-chrono-dev \
+                libminiupnpc-dev libzmq3-dev libsqlite3-dev libdb++-dev libfmt-dev \
+                g++-10; then
+                return 0
+              fi
+              echo "apt-get attempt $i failed, retrying in 60s..."
+              sleep 60
+            done
+            echo "ERROR: All apt-get attempts failed."
+            return 1
+          }
+          install_deps
+          python3 -m pip install --upgrade pip pytest
+
+      - name: Clone Dogecoin base (pin e0a1c157)
+        working-directory: deploy
+        run: make clone-dogecoin
+
+      - name: Run fail-closed M3 integration gate (debug daemon + G1-G3)
+        working-directory: deploy
+        run: |
+          # Fail-closed: capture make's exit code and propagate it. We avoid
+          # 'set -o pipefail' (unsupported by dash, the container's /bin/sh)
+          # by writing to a log, capturing rc, printing, then exiting with rc.
+          # NOTE: 'if' block is used (not bare '; rc=$?') because the container
+          # runs with 'sh -e' which terminates on a bare non-zero command.
+          rc=0
+          if make m3-integration > /tmp/m3_gate_console.log 2>&1; then :; else rc=$?; fi
+          cat /tmp/m3_gate_console.log
+          exit $rc
+
+      - name: Upload M3 integration report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Litenyx-m3-integration-report
+          path: |
+            /tmp/m3_integration_report.txt
+            /tmp/m3_gate_console.log

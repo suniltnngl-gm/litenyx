@@ -5,7 +5,7 @@
 #include <litenyx/LITENYX_types.h>
 
 #define BOOST_TEST_MODULE LITENYX_test
-#include <boost/test/included/unit_test.hpp>
+#include <boost/test/unit_test.hpp>
 
 #include <set>
 #include <utility>
