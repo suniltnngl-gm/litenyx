@@ -1,5 +1,7 @@
 # Litenyx
 
+> **Current-authority notice (2026-07-24):** this repository contains historical constitutional/experimental material. Before treating an older `LOCKED`, `FROZEN`, `MANDATORY`, or `CONSTITUTIONAL` statement as current architecture, read `docs/CURRENT_AUTHORITY.md`. Historical labels do not independently establish current authority; relaxability does not imply removal.
+
 A clean-slate fork derived from **Dogecoin**, applying the protocol principles
 locked across prior experiments (KerrNyx, Veltrix, WaveCore). Litenyx is
 structured as a gradual, phased fork of Dogecoin rather than a from-scratch
@@ -19,18 +21,20 @@ and not per-chain ledgers.
 
 ## Status
 
+> The phase table below is historical planning provenance. In particular, dynamic split/merge, negative-supply, dynamic-wallet-count, and coupled-controller entries are **not** current authority merely because they appear here. See `docs/CURRENT_AUTHORITY.md`.
+
 | Track | Phase | Scope | Status |
 |-------|-------|-------|--------|
 | I | 0 | Protocol constitution (white paper + consensus spec) | in progress |
 | I | 1 | Clean Dogecoin fork (identity, magic, ports, genesis, AuxPoW) | planned |
 | II | 2 | Fixed two-chain shared-state consensus | next milestone |
-| II | 3 | Dynamic split/merge (N_t -> N_t+1) | future |
-| III | 4 | Dynamic block size | future |
-| III | 5 | Dynamic block reward | future |
-| IV | 6 | Negative supply shadow accounting | future |
-| IV | 7 | Dynamic wallet count / negative position | future |
-| IV | 8 | Unified controller simulation | future |
-| IV | 9 | Public network progression | future |
+| II | 3 | Dynamic split/merge (N_t -> N_t+1) | historical planning |
+| III | 4 | Dynamic block size | historical planning |
+| III | 5 | Dynamic block reward | historical planning |
+| IV | 6 | Negative supply shadow accounting | superseded historical planning |
+| IV | 7 | Dynamic wallet count / negative position | superseded historical planning |
+| IV | 8 | Unified controller simulation | historical research |
+| IV | 9 | Public network progression | historical planning |
 
 ## Repository layout
 
@@ -50,16 +54,16 @@ ConsensusCore  !=  RuntimePolicy  !=  WalletPolicy
 ```
 
 Experimental economic / wallet mechanisms must never contaminate basic
-consensus validation. Every feature carries one of four statuses:
-`LOCKED`, `EXPERIMENTAL`, `OPEN`, `FUTURE`.
+consensus validation. Historical feature-status labels must be interpreted
+through the current-authority notice rather than by label alone.
 
 ## Build & test
 
 See `deploy/Makefile`. CI runs build + `make cpp-test` + regtest on every push.
 
-## Immediate next milestone
+## Historical milestone context
 
-Fixed Multi-Chain Shared-State Consensus (Phase 2 substrate): prove that a
+Fixed Multi-Chain Shared-State Consensus (Phase 2 substrate) originally aimed to prove that a
 wallet can spend the same globally-valid currency through either of two fixed
 parallel chains while guaranteeing
 
@@ -67,4 +71,4 @@ parallel chains while guaranteeing
 Spend(U, Chain_A) => NOT Spend(U, Chain_B)
 ```
 
-for the same spendable state U. See `docs/litenyx_consensus_spec_v0.1.md`.
+for the same spendable state U. See `docs/litenyx_consensus_spec_v0.1.md` for the historical specification context and `docs/CURRENT_AUTHORITY.md` before interpreting it as present authority.
